@@ -114,3 +114,6 @@ jenkins_home/jobs/**
 
 # AI Agents
 CLAUDE.MD
+
+# Planning notes (working documents, not deliverables)
+plan/
