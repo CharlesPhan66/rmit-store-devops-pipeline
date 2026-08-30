@@ -1,30 +1,21 @@
-# syntax=docker/dockerfile:1
-#
 # RMIT Store — API image (Django + gunicorn).
 #
-# BUILD CONTEXT IS THE REPO ROOT, not app/server/. Tom's application is
-# vendored one level down, so every COPY source carries the app/ prefix:
+# Please build from the repo root, not app/server/. Tom's application is
+# placed under one level down, so every COPY source carries the app/ prefix:
 #
+# How to build this image from the repo root:
 #     docker build -f docker/api.Dockerfile -t rmit-api:local .
-#
-# A COPY source missing that prefix is the single most likely cause of a
-# "file not found" on a first build.
 
-# ---------------------------------------------------------------------------
-# Stage 1 — build the virtualenv
-# ---------------------------------------------------------------------------
-# Separated from the runtime stage so that pip's caches, and any compiler
-# needed by a package without a wheel, never reach the shipped image.
+# Stage 1 — build the virtualenv (This stage doesn't count toward to the final image)
 FROM python:3.12-slim AS builder
 
-# # Optimize pip: disable version check and local cache for faster, smaller builds
+# Optimize pip: disable version check and local cache for faster, smaller builds
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
 
 WORKDIR /build
 
-# requirements.txt alone first: this layer is cached until the dependency list
-# itself changes, so an edit to a view does not reinstall Django.
+# requirements.txt alone first
 COPY app/server/requirements.txt .
 
 RUN python -m venv /opt/venv \
@@ -34,10 +25,18 @@ RUN python -m venv /opt/venv \
 # Stage 2 - Runtime: This final stage forms the actual Docker image, discarding all temporary build files to minimize size
 FROM python:3.12-slim AS runtime
 
-# Overridable via --build-arg at build time; otherwise defaults apply
+# How to build this image from the repo root with custom version and commit:
+#     docker build -f docker/api.Dockerfile \
+#       --build-arg APP_VERSION=1.0.0 \
+#       --build-arg GIT_COMMIT="$(git rev-parse --short HEAD)" \
+#       -t rmit-api:local .
+#
+# Otherwise, defaults are used for local builds (APP_VERSION=1.0.0, GIT_COMMIT=dev).
 ARG APP_VERSION=1.0.0
 ARG GIT_COMMIT=dev
 
+# Set environment variables for Python and Django, including the application version and Git commit hash.
+# These variables are used to configure the runtime environment and ensure that the application runs with the correct settings.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH" \
