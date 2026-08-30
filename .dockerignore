@@ -1,0 +1,39 @@
+# Build context = repo root. Everything below never belongs in an image.
+#
+# Without this file the context includes .venv/ (hundreds of MB) and
+# node_modules/, and every build crawls — on a t3.micro it can time out.
+
+.git
+.gitignore
+.dockerignore
+
+# Our own working documents, not application code.
+plan/
+docs/
+CLAUDE.MD
+README.md
+app/README.md
+app/screenshots/
+
+# Secrets. These must reach the container as environment variables at run
+# time, never as a layer in the image.
+**/.env
+**/.env.*
+!**/.env.example
+*.pem
+*.key
+
+# Language caches and local build output — rebuilt inside the image.
+**/.venv/
+**/venv/
+**/node_modules/
+**/__pycache__/
+**/*.py[cod]
+app/client/dist/
+app/server/staticfiles/
+
+# Uploaded media is runtime state living on a volume or in S3, never in the
+# image. Baking it in makes every image a snapshot of one machine's disk.
+app/server/media/
+
+**/.DS_Store
