@@ -9,6 +9,7 @@ under `app/` and each build needs to reach into it.
 | `client.Dockerfile` | the SPA behind nginx | `nginx:1.27-alpine` | `dist/` only — **no Node** |
 | `client-entrypoint.sh` | — | — | renders `config.js` from `$API_BASE_URL` at container start |
 | `client-nginx.conf` | — | — | SPA fallback, cache rules, `/nginx-health` |
+| `client-nginx-compose.conf` | — | — | the same plus `/api/`, `/media/`, `/static/` proxied to the `api` service — used only by `docker-compose.yml` |
 | `userdata-api.sh` | — | — | EC2 user data for the API host: hostname, Docker, git |
 | `userdata-client.sh` | — | — | the same, for the frontend host |
 
@@ -21,19 +22,37 @@ from inside the instance by any process, without privileges.
 
 ## Build
 
+Always tag with the commit as well as with `local`. Two tags, one image: `local`
+is what the run commands name, and the commit tag is what makes a rollback
+possible.
+
 ```bash
 # from the repo root — the trailing dot is the build context
-docker build -f docker/api.Dockerfile    -t rmit-api:local .
-docker build -f docker/client.Dockerfile -t rmit-client:local .
+TAG=$(git rev-parse --short HEAD)
+
+docker build -f docker/api.Dockerfile \
+  --build-arg GIT_COMMIT="$TAG" \
+  -t rmit-api:"$TAG" -t rmit-api:local .
+
+docker build -f docker/client.Dockerfile \
+  -t rmit-client:"$TAG" -t rmit-client:local .
 ```
 
-With a version stamp, so `GET /api/version/` identifies the build:
+`--build-arg GIT_COMMIT` is what makes `GET /api/version/` report the commit
+instead of the `dev` default, so the deployed build can be identified through a
+load balancer. `APP_VERSION` works the same way for a release number.
+
+**Building with only `-t rmit-api:local` throws away the previous build.** The
+tag moves to the new image and the old one becomes `<none>:<none>` — still on
+disk, still runnable by image ID, but nameless and deleted by the next
+`docker system prune -a`. With the commit tag, rollback is a `docker run` away:
 
 ```bash
-docker build -f docker/api.Dockerfile \
-  --build-arg APP_VERSION=1.2.0 \
-  --build-arg GIT_COMMIT="$(git rev-parse --short HEAD)" \
-  -t rmit-api:1.2.0 .
+docker images rmit-api                       # every build still has a name
+docker rm -f rmit-api
+docker run -d --name rmit-api -p 80:8000 --env-file api.env \
+  --restart unless-stopped rmit-api:a1b2c3d
+curl -s http://127.0.0.1/api/version/        # confirms which build is serving
 ```
 
 ## Run
@@ -70,6 +89,25 @@ docker run --rm --env-file api.env rmit-api:local python manage.py migrate
 `config.js` at container start. One image serves staging and production; only
 `$API_BASE_URL` differs. Promoting the exact artifact that passed its tests
 depends on this.
+
+## The whole stack on one host
+
+`docker-compose.yml` at the repo root brings up four services — `db`, `migrate`,
+`api`, `client` — from these same two images:
+
+```bash
+docker compose up -d --build
+```
+
+It is a **development and CI stack**, not the production topology: dev settings
+and a throwaway Postgres container, no RDS and no S3. What it buys is a stack
+that comes up anywhere Docker runs, which is what a CI job needs to run the
+integration suite without borrowing the shared database. Production stays as
+described above.
+
+`migrate` is a separate service there for the same reason it is absent from the
+image: it must run once per release, gated behind the database being healthy and
+ahead of the API accepting traffic.
 
 ## Media
 

@@ -1,0 +1,103 @@
+# RMIT Store - production-shaped stack on one host (Plan E, option B).
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml ps
+#   docker compose -f docker-compose.prod.yml down
+#
+# The -f flag is required every time. Without it Compose reads
+# docker-compose.yml, which is the dev stack.
+#
+# Difference from docker-compose.yml:
+#   - config.settings.prod instead of dev: DEBUG off, ALLOWED_HOSTS enforced,
+#     browsable API off, secure-cookie defaults on.
+#   - USE_S3=true: uploaded images go to the S3 bucket, not container disk.
+#   - Configuration comes from compose.env, which is NOT committed.
+#   - Published on 8081, so it can run beside the dev stack on 8080.
+#
+# What it costs: this stack needs an AWS account, a bucket and an IAM instance
+# profile, so it does not come up on a laptop or on a CI agent outside AWS.
+# That is exactly what the dev stack is for. Read plan-e-compose-prod.md.
+
+name: rmit-store-prod
+
+services:
+
+  # --- Database --------------------------------------------------------------
+  # Still a container here, because the README asks for the database to be one.
+  # To use RDS instead: delete this whole service, delete the depends_on block
+  # in migrate, and point DATABASE_URL in compose.env at the RDS endpoint.
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rmit
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: rmit_store
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rmit -d rmit_store"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # --- Migrations ------------------------------------------------------------
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: rmit-api:local
+    command: python manage.py migrate --noinput
+    env_file:
+      - ./compose.env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  # --- API -------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: rmit-api:local
+    env_file:
+      - ./compose.env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # /readyz/ checks the database AND the storage backend, so with USE_S3=true
+    # this also proves the container can reach the bucket. If it stays 503 while
+    # `aws s3 ls` works on the host, read the IMDS hop limit section of the plan.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # --- Frontend --------------------------------------------------------------
+  client:
+    build:
+      context: .
+      dockerfile: docker/client.Dockerfile
+    image: rmit-client:local
+    environment:
+      API_BASE_URL: /api
+    volumes:
+      # Same file as the dev stack. Its /media/ block simply never receives a
+      # request here: with USE_S3=true the browser fetches images straight from
+      # the bucket, so those URLs never come back to nginx at all.
+      - ./docker/client-nginx-compose.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8081:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+
+# No media volume anywhere in this file, and that is the point. Uploaded images
+# live in S3, so every replica reads the same bucket and `--scale api=2` shows
+# no broken images at all. That is the fix the dev stack demonstrates the need
+# for.

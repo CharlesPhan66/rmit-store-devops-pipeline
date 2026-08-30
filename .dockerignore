@@ -37,3 +37,6 @@ app/server/staticfiles/
 app/server/media/
 
 **/.DS_Store
+
+# Runtime configuration, must never be baked into an image.
+compose.env

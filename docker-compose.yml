@@ -1,0 +1,131 @@
+# RMIT Store - the whole stack on one host.
+#
+#   docker compose up -d --build
+#   docker compose ps
+#   docker compose logs -f
+#   docker compose down       # keeps the database
+#   docker compose down -v    # deletes the database too
+#
+# This is a development and CI stack, not the production topology. It uses
+# config.settings.dev and a throwaway Postgres container. Production keeps RDS,
+# S3 and prod settings - see plan D.
+#
+# Four services, not three. The fourth one, migrate, is the answer to the
+# question the README asks: where do migrations run when everything starts at
+# once? Not in an entrypoint, and not once per replica. In a job that runs once
+# and has to finish before the API starts.
+
+# Without this, Compose names every container after the folder, which here is
+# 2026b-cosc2767-a2-sg-team-13.
+name: rmit-store
+
+services:
+
+  # --- Database --------------------------------------------------------------
+  # The tier Plan D did not have as a container. Same major version as the RDS
+  # instance, so a migration that applies here applies there.
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rmit
+      POSTGRES_PASSWORD: rmit
+      POSTGRES_DB: rmit_store
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # A started container is not a ready database. Postgres needs a few more
+    # seconds before it accepts connections, so the services below wait for
+    # this check to pass rather than for the container to start.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rmit -d rmit_store"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # --- Migrations ------------------------------------------------------------
+  # Runs once to initialize the database, exits, and the API container is not allowed to start until it succeeds.
+  # This is why migrate is in neither the Dockerfile nor an entrypoint: it must
+  # run once per release, not once per container.
+  #
+  # Same image as api (use the same Dockerfile/image), just a different command.
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: rmit-api:local
+    command: python manage.py migrate --noinput
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      DATABASE_URL: postgres://rmit:rmit@db:5432/rmit_store
+      SECRET_KEY: dev-only-not-a-real-secret
+      USE_S3: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+    # Do not restart this one. It is a job: exiting is success, not a crash.
+    restart: "no"
+
+  # --- API -------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: rmit-api:local
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      DATABASE_URL: postgres://rmit:rmit@db:5432/rmit_store
+      SECRET_KEY: dev-only-not-a-real-secret
+      USE_S3: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # The image already has a HEALTHCHECK, but it probes /healthz/, which only
+    # says the process is alive. Here we want /readyz/, which also checks the
+    # database, because client should wait until the API can actually serve.
+    # urlopen raises an error on a 503, so the check fails on its own.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    # No ports here on purpose. The API is reached through the client's nginx.
+    # Publishing a fixed host port would make `--scale api=2` fail with
+    # "port is already allocated". To reach it directly: docker compose exec api
+
+  # --- Frontend --------------------------------------------------------------
+  client:
+    build:
+      context: .
+      dockerfile: docker/client.Dockerfile
+    image: rmit-client:local
+    environment:
+      # Same origin as the page itself, so the browser never makes a
+      # cross-origin request and CORS does not apply at all.
+      API_BASE_URL: /api
+    volumes:
+      # The config inside the image only serves static files, which is correct
+      # for Plan D's two hosts. Here nginx also proxies /api to the api service.
+      - ./docker/client-nginx-compose.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+
+  # --- The media exercise ----------------------------------------------------
+  # Left commented out on purpose. With no volume, uploads land on each API
+  # container's own disk, so with two replicas an image uploaded through one
+  # 404s from the other about half the time. That is the lesson the README
+  # plants, not a bug. Reproduce it and screenshot it first.
+  #
+  # To fix it on this host, uncomment media below and add to the api service:
+  #
+  #   volumes:
+  #     - media:/srv/app/media
+  #
+  # That works on one host and no further. Two hosts need USE_S3=true.
+  #
+  # media:
