@@ -1,9 +1,10 @@
 # Author: Charles
 # RMIT Store - the whole stack on one host.
 #
-#   docker compose -f docker-compose.prod.yml up -d --build
-#   docker compose -f docker-compose.prod.yml ps
-#   docker compose -f docker-compose.prod.yml down
+#   docker compose --env-file compose.env -f docker-compose.prod.yml up -d --build
+#   docker compose --env-file compose.env -f docker-compose.prod.yml ps
+#   docker compose --env-file compose.env -f docker-compose.prod.yml down
+#   docker compose --env-file compose.env -f docker-compose.prod.yml down -v
 #
 # The -f flag is required every time to specify the production compose file (not the docker-compose.yml, this is dev stack).
 #
@@ -11,8 +12,7 @@
 #   - config.settings.prod instead of dev: DEBUG off, ALLOWED_HOSTS enforced,
 #     browsable API off, secure-cookie defaults on.
 #   - USE_S3=true: uploaded images go to the S3 bucket, not container disk.
-#   - RDS instead of a db container: no database service here at all.
-#   - Configuration comes from compose.env, which is NOT committed.
+#   - Configuration comes from compose.env, which is NOT committed. (Modify compose.env.example and copy it to compose.env, then fill in the values.)
 #   - Published on 8081, so it can run beside the dev stack on 8080. (Remember to open 8081 in the security group.)
 #
 # Prerequisites, all from Plan C / Plan D:
@@ -100,6 +100,7 @@ services:
       # request here: with USE_S3=true the browser fetches images straight from
       # the bucket, so those URLs never come back to nginx at all.
       - ./docker/client-nginx-compose.conf:/etc/nginx/conf.d/default.conf:ro
+    # Different port from the dev stack, so they can run side by side on one host.
     ports:
       - "8081:80"
     depends_on:
