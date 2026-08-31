@@ -2,10 +2,10 @@ pipeline {
     agent any
 
     environment {
-        API_IMAGE        = 'rmit-store-api'
-        FRONTEND_IMAGE   = 'rmit-store-frontend'
-        TEST_DB_CONTAINER = 'jenkins-test-db'
-        TEST_DB_PORT     = '5433'
+        API_IMAGE          = 'rmit-store-api'
+        FRONTEND_IMAGE     = 'rmit-store-frontend'
+        TEST_DB_CONTAINER  = 'jenkins-test-db'
+        TEST_DB_PORT       = '5433'
     }
 
     stages {
@@ -55,14 +55,10 @@ pipeline {
                         -e DATABASE_URL=postgres://rmit:rmit@localhost:${TEST_DB_PORT}/rmit_store \\
                         -e SECRET_KEY=jenkins-test-key \\
                         -e ALLOWED_HOSTS=localhost,127.0.0.1 \\
-                        -e DJANGO_SETTINGS_MODULE=config.settings.dev \\
+                        -e DJANGO_SETTINGS_MODULE=ci_test_settings \\
                         -v "\$(pwd)/test-reports:/app/test-reports" \\
                         --entrypoint sh ${API_IMAGE}:${env.BUILD_NUMBER} \\
-                        -c "pip install --quiet unittest-xml-reporting && \\
-                            python manage.py test \\
-                                --testrunner=xmlrunner.extra.djangotestrunner.XMLTestRunner \\
-                                --output-dir=/app/test-reports \\
-                                apps.orders apps.catalog apps.core"
+                        -c "pip install --quiet unittest-xml-reporting && python manage.py test apps.orders apps.catalog apps.core"
                 """
             }
             post {
@@ -75,13 +71,13 @@ pipeline {
 
         stage('Frontend E2E tests') {
             steps {
-                echo 'TODO: Playwright browser binaries not yet installed on the Jenkins host (blocked by disk space during setup). See PR description for the plan.'
+                echo 'TODO: Playwright browser binaries not yet installed on the Jenkins host (blocked by disk space during setup).'
             }
         }
 
         stage('Deploy to staging') {
             steps {
-                echo 'TODO: blocked on G1 (Infrastructure as Code) - no staging environment exists yet. See PR description.'
+                echo 'TODO: blocked on G1 (Infrastructure as Code) - no staging environment exists yet.'
             }
         }
 
@@ -90,7 +86,7 @@ pipeline {
                 branch 'main'
             }
             steps {
-                echo 'TODO: blocked on G1 - no production environment exists yet. See PR description.'
+                echo 'TODO: blocked on G1 - no production environment exists yet.'
             }
         }
     }
