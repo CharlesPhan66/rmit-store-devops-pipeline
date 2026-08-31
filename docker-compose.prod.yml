@@ -1,31 +1,41 @@
-# RMIT Store - production-shaped stack on one host (Plan E, option B).
+# Author: Charles
+# RMIT Store - the whole stack on one host.
 #
 #   docker compose -f docker-compose.prod.yml up -d --build
 #   docker compose -f docker-compose.prod.yml ps
 #   docker compose -f docker-compose.prod.yml down
 #
-# The -f flag is required every time. Without it Compose reads
-# docker-compose.yml, which is the dev stack.
+# The -f flag is required every time to specify the production compose file (not the docker-compose.yml, this is dev stack).
 #
 # Difference from docker-compose.yml:
 #   - config.settings.prod instead of dev: DEBUG off, ALLOWED_HOSTS enforced,
 #     browsable API off, secure-cookie defaults on.
 #   - USE_S3=true: uploaded images go to the S3 bucket, not container disk.
+#   - RDS instead of a db container: no database service here at all.
 #   - Configuration comes from compose.env, which is NOT committed.
-#   - Published on 8081, so it can run beside the dev stack on 8080.
+#   - Published on 8081, so it can run beside the dev stack on 8080. (Remember to open 8081 in the security group.)
 #
-# What it costs: this stack needs an AWS account, a bucket and an IAM instance
-# profile, so it does not come up on a laptop or on a CI agent outside AWS.
-# That is exactly what the dev stack is for. Read plan-e-compose-prod.md.
+# Prerequisites, all from Plan C / Plan D:
+#   - an RDS endpoint, reachable from this instance's security group on 5432
+#   - an S3 bucket, and an IAM instance profile on this EC2 (no AWS keys anywhere)
+#   - compose.env, written by hand on the box - see plan-e-compose-prod.md
+#
+# Three services, not four. The database is managed infrastructure now, which is
+# what production actually looks like. The dev stack keeps its db container
+# because its job is to come up anywhere Docker runs, with no AWS at all.
 
 name: rmit-store-prod
 
 services:
 
   # --- Database --------------------------------------------------------------
-  # Still a container here, because the README asks for the database to be one.
   # To use RDS instead: delete this whole service, delete the depends_on block
   # in migrate, and point DATABASE_URL in compose.env at the RDS endpoint.
+  # However, the RDS instance must be running long before this stack starts, so there is nothing to wait for.
+  # But for testing purposes, let say you want to compose up quickly to see if the stack works, you can use a db container here. Just remember to delete it before you deploy to AWS.
+  # Ideally for staging, db container should be removed and use RDS instead. The db container is only for testing purposes.
+  # However, you should figure out a way to set RDS up as a service in the compose file,
+  # so that you can compose up and down the whole stack including RDS, no need to manually set up RDS
   db:
     image: postgres:16-alpine
     environment:
@@ -47,6 +57,7 @@ services:
       dockerfile: docker/api.Dockerfile
     image: rmit-api:local
     command: python manage.py migrate --noinput
+    # Because S3 is used, instead of having environment:, we use env_file: to load the environment variables from compose.env, which is not committed to git. This is to avoid exposing sensitive information like AWS keys and RDS password in the source code.
     env_file:
       - ./compose.env
     depends_on:
@@ -60,6 +71,7 @@ services:
       context: .
       dockerfile: docker/api.Dockerfile
     image: rmit-api:local
+    # env_file instead of environment: to load the environment variables from compose.env, which is not committed to git. This is to avoid exposing sensitive information like AWS keys and RDS password in the source code.
     env_file:
       - ./compose.env
     depends_on:

@@ -1,3 +1,4 @@
+# Author: Charles
 # RMIT Store - the whole stack on one host.
 #
 #   docker compose up -d --build
@@ -6,30 +7,28 @@
 #   docker compose down       # keeps the database
 #   docker compose down -v    # deletes the database too
 #
-# This is a development and CI stack, not the production topology. It uses
-# config.settings.dev and a throwaway Postgres container. Production keeps RDS,
-# S3 and prod settings - see plan D.
-#
-# Four services, not three. The fourth one, migrate, is the answer to the
-# question the README asks: where do migrations run when everything starts at
-# once? Not in an entrypoint, and not once per replica. In a job that runs once
-# and has to finish before the API starts.
+# Description of the services and how they work together:
+# Creates a Postgres database, runs migrations, starts the Django API, and serves the Vue SPA through nginx. The API is not exposed directly; the SPA proxies requests to it.
+# db must be healthy before migrate runs, and migrate must complete successfully before api starts. The client waits for api to be healthy before it starts serving requests.
+# Dependencies: db <- migrate <- api <- client
+# migrate is a one-time job that initializes the database schema, not a long-running service. It exits after it completes, and the api service will not start until it has completed successfully.
 
-# Without this, Compose names every container after the folder, which here is
-# 2026b-cosc2767-a2-sg-team-13.
+# Specifies a custom project name for the Compose application. This is useful to avoid naming conflicts with other Compose projects on the same host.
+# Without this, Compose names every container after the folder, which here is 2026b-cosc2767-a2-sg-team-13.
 name: rmit-store
 
 services:
 
   # --- Database --------------------------------------------------------------
-  # The tier Plan D did not have as a container. Same major version as the RDS
-  # instance, so a migration that applies here applies there.
+  # This is the same as dedicated server hosting psql in plan B, but here it is a container
   db:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: rmit
       POSTGRES_PASSWORD: rmit
       POSTGRES_DB: rmit_store
+    # The database is stored in a volume, so it persists across container restarts and even after the container is deleted.
+    # This is important for development, as you don't want to lose your data every time you rebuild the image or restart the container.
     volumes:
       - pgdata:/var/lib/postgresql/data
     # A started container is not a ready database. Postgres needs a few more
@@ -43,10 +42,13 @@ services:
 
   # --- Migrations ------------------------------------------------------------
   # Runs once to initialize the database, exits, and the API container is not allowed to start until it succeeds.
-  # This is why migrate is in neither the Dockerfile nor an entrypoint: it must
-  # run once per release, not once per container.
+  # This is why migrate is in neither the Dockerfile nor an entrypoint: it must run once per release, not once per container.
   #
-  # Same image as api (use the same Dockerfile/image), just a different command.
+  # Same image as api (use the same Dockerfile/image) as it uses the backend to initialize the database, just a different command.
+  # You may get rid of build layer and just use image if you have built the image already
+  # Recommend to find the way to build image separately as compose requires buildx, the buildx plugin is not available for AL2023. So, you can build the image separately and use it in the compose file.
+  # If you build the image separately, you can remove the build section and just use the image section in the migrate service.
+  # Or you can just leave it as it is and get rid of the flag --build in the compose up command. It will use the existing image if it is already built, and build it if it is not.
   migrate:
     build:
       context: .
@@ -115,17 +117,13 @@ services:
 volumes:
   pgdata:
 
-  # --- The media exercise ----------------------------------------------------
-  # Left commented out on purpose. With no volume, uploads land on each API
-  # container's own disk, so with two replicas an image uploaded through one
-  # 404s from the other about half the time. That is the lesson the README
-  # plants, not a bug. Reproduce it and screenshot it first.
-  #
-  # To fix it on this host, uncomment media below and add to the api service:
-  #
+  # CASE USE_S3=FALSE, you will find that if you run with api scale=2
+  # 2 containers will be running, but only one of them will be able to serve media files if someone uploads a file. 
+  # This is because 2 replicas of the api service doesn't meet the source of truth for media files, which is volume media
+  # Solution 1: Create volume media, then state in the api service to mount the volume media to /srv/app/media
+  # media:
+  # on api service, add the following lines:
   #   volumes:
   #     - media:/srv/app/media
   #
-  # That works on one host and no further. Two hosts need USE_S3=true.
-  #
-  # media:
+  # Solution 2: Use S3 to store media files, then all replicas of the api service can serve media files from S3.
