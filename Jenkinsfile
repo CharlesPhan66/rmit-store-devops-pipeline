@@ -88,7 +88,7 @@ pipeline {
                     done
 
                     docker run -d --name e2e-api --network host \\
-    -e DATABASE_URL=postgres://rmit:rmit@localhost:${TEST_DB_PORT}/rmit_store \\
+    -e DATABASE_URL=postgres://rmit:rmit@localhost:5434/rmit_store \\
     -e SECRET_KEY=jenkins-e2e-key \\
     -e ALLOWED_HOSTS=localhost,127.0.0.1 \\
     -e DJANGO_SETTINGS_MODULE=config.settings.dev \\
