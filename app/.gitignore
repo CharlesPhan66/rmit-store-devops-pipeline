@@ -58,3 +58,9 @@ Thumbs.db
 .vscode/
 *.swp
 *~
+config.js
+client/config.js
+client/test-results/
+server/*.bat
+server/.bat
+docker-compose.txt
