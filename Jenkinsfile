@@ -70,52 +70,69 @@ pipeline {
             }
         }
 
-        stage('Frontend E2E tests') {
-    steps {
-        sh """
-            docker rm -f e2e-api e2e-frontend || true
+                stage('Frontend E2E tests') {
+            steps {
+                sh """
+                    docker rm -f e2e-db e2e-api e2e-frontend || true
 
-            docker run -d --name e2e-api --network host \\
-                -e DATABASE_URL=postgres://rmit:rmit@localhost:${TEST_DB_PORT}/rmit_store \\
-                -e SECRET_KEY=jenkins-e2e-key \\
-                -e ALLOWED_HOSTS=localhost,127.0.0.1 \\
-                -e DJANGO_SETTINGS_MODULE=config.settings.dev \\
-                ${API_IMAGE}:${env.BUILD_NUMBER}
+                    docker run -d --name e2e-db \\
+                        -e POSTGRES_USER=rmit \\
+                        -e POSTGRES_PASSWORD=rmit \\
+                        -e POSTGRES_DB=rmit_store \\
+                        -p 5434:5432 postgres:16
 
-            echo 'Waiting for API to become healthy...'
-            for i in \$(seq 1 15); do
-                curl -sf http://localhost:8000/healthz/ && break
-                sleep 2
-            done
+                    echo 'Waiting for e2e database to accept connections...'
+                    for i in \$(seq 1 15); do
+                        docker exec e2e-db pg_isready -U rmit && break
+                        sleep 2
+                    done
 
-            docker exec e2e-api python manage.py seed_demo \\
-                --admin-email admin@rmit.edu.au \\
-                --admin-password 'RmitStore2767!' --no-images || true
+                    docker run -d --name e2e-api --network host \\
+    -e DATABASE_URL=postgres://rmit:rmit@localhost:${TEST_DB_PORT}/rmit_store \\
+    -e SECRET_KEY=jenkins-e2e-key \\
+    -e ALLOWED_HOSTS=localhost,127.0.0.1 \\
+    -e DJANGO_SETTINGS_MODULE=config.settings.dev \\
+    ${API_IMAGE}:${env.BUILD_NUMBER}
 
-            echo "window.__APP_CONFIG__ = { API_BASE_URL: 'http://localhost:8000/api' }" > /tmp/e2e-config.js
+echo 'Waiting for API to become healthy...'
+for i in \$(seq 1 15); do
+    curl -sf http://localhost:8000/healthz/ && break
+    sleep 2
+done
 
-            docker run -d --name e2e-frontend --network host \\
-                -v /tmp/e2e-config.js:/usr/share/nginx/html/config.js:ro \\
-                ${FRONTEND_IMAGE}:${env.BUILD_NUMBER}
+echo '--- e2e-api container logs ---'
+docker logs e2e-api
+echo '--- end logs ---'
 
-            echo 'Waiting for frontend to respond...'
-            for i in \$(seq 1 15); do
-                curl -sf http://localhost:80/ && break
-                sleep 2
-            done
+docker exec e2e-api python manage.py seed_demo \\
+    --admin-email admin@rmit.edu.au \\
+    --admin-password 'RmitStore2767!' --no-images || true
 
-            docker run --rm --network host \\
-                -v "\$(pwd)/app/client:/work" -w /work \\
-                mcr.microsoft.com/playwright:v1.62.1-jammy \\
-                sh -c "npm install --no-save @playwright/test && npx playwright test --config=playwright.config.js"
-        """
-    }
-    post {
-        always {
-            sh "docker rm -f e2e-api e2e-frontend jenkins-test-db || true"
+                    echo "window.__APP_CONFIG__ = { API_BASE_URL: 'http://localhost:8000/api' }" > /tmp/e2e-config.js
+
+                    docker run -d --name e2e-frontend --network host \\
+                        -v /tmp/e2e-config.js:/usr/share/nginx/html/config.js:ro \\
+                        ${FRONTEND_IMAGE}:${env.BUILD_NUMBER}
+
+                    echo 'Waiting for frontend to respond...'
+                    for i in \$(seq 1 15); do
+                        curl -sf http://localhost:80/ && break
+                        sleep 2
+                    done
+
+                    docker run --rm --network host \\
+                        -e E2E_BASE_URL=http://localhost:80 \\
+                        -v "\$(pwd)/app/client:/work" -w /work \\
+                        mcr.microsoft.com/playwright:v1.62.1-jammy \\
+                        sh -c "npm install --no-save @playwright/test && npx playwright test --config=playwright.config.js"
+                """
+            }
+            post {
+                always {
+                    sh "docker rm -f e2e-db e2e-api e2e-frontend || true"
+                }
+            }
         }
-    }
-}
 
         stage('Deploy to staging') {
             steps {

@@ -3,6 +3,6 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './e2e',
   use: {
-    baseURL: process.env.CI ? 'http://localhost:80' : 'http://localhost:5173',
-},
+    baseURL: process.env.E2E_BASE_URL || 'http://localhost:5173',
+  },
 });
