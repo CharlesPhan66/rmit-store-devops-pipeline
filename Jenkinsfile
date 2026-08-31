@@ -106,7 +106,7 @@ pipeline {
 
             docker run --rm --network host \\
                 -v "\$(pwd)/app/client:/work" -w /work \\
-                mcr.microsoft.com/playwright:v1.47.0-jammy \\
+                mcr.microsoft.com/playwright:v1.62.1-jammy \\
                 sh -c "npm install --no-save @playwright/test && npx playwright test --config=playwright.config.js"
         """
     }
