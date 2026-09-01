@@ -1,0 +1,273 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "RMIT Store Infrastructure - Compute Instances & ALB"
+
+Parameters:
+  NetworkStackName:
+    Type: String
+    Default: rmit-store-network
+    Description: Name of parent network stack
+
+  DataStackName:
+    Type: String
+    Default: rmit-store-data
+    Description: Name of parent data/storage stack
+
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 KeyPair for SSH access
+    Default: devops_project_key
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
+    Description: Dynamic SSM parameter lookup for latest Amazon Linux 2023 AMI
+
+Resources:
+  # === 7. COMPUTE INSTANCES ===
+  JenkinsMasterInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      ImageId: !Ref LatestAmiId
+      KeyName: !Ref KeyPairName
+      IamInstanceProfile: !ImportValue
+        "Fn::Sub": "${DataStackName}-EC2InstanceProfile"
+      SubnetId: !ImportValue
+        "Fn::Sub": "${NetworkStackName}-PublicSubnet1"
+      SecurityGroupIds:
+        - !ImportValue
+          "Fn::Sub": "${NetworkStackName}-JenkinsSecurityGroup"
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 25
+            VolumeType: gp3
+      Tags:
+        - Key: Name
+          Value: rmit-jenkins-master
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          hostnamectl set-hostname jenkins-master
+          dnf update -y
+          dnf install -y git wget fontconfig java-21-amazon-corretto docker
+          echo "tmpfs /tmp tmpfs defaults,size=3G 0 0" >> /etc/fstab
+          mount -o remount /tmp
+          wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/rpm-stable/jenkins.repo
+          rpm --import https://pkg.jenkins.io/rpm-stable/jenkins.io-2023.key
+          dnf install -y jenkins
+          systemctl enable --now docker jenkins
+          usermod -aG docker ec2-user
+          usermod -aG docker jenkins
+
+  AnsibleServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      KeyName: !Ref KeyPairName
+      IamInstanceProfile: !ImportValue
+        "Fn::Sub": "${DataStackName}-EC2InstanceProfile"
+      SubnetId: !ImportValue
+        "Fn::Sub": "${NetworkStackName}-PublicSubnet2"
+      SecurityGroupIds:
+        - !ImportValue
+          "Fn::Sub": "${NetworkStackName}-AppSecurityGroup"
+      ImageId: !Ref LatestAmiId
+      Tags:
+        - Key: Name
+          Value: rmit-ansible-server
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          hostnamectl set-hostname ansible-controller
+          dnf update -y
+          dnf install -y git docker python3.11 python3.11-pip ansible
+          useradd -m ansibleadmin
+          echo "ansibleadmin:AnsibleMaster2767!" | chpasswd
+          echo "ansibleadmin ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          systemctl restart sshd
+          systemctl enable --now docker
+          usermod -aG docker ec2-user
+          usermod -aG docker ansibleadmin
+
+  StagingInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      KeyName: !Ref KeyPairName
+      IamInstanceProfile: !ImportValue
+        "Fn::Sub": "${DataStackName}-EC2InstanceProfile"
+      SubnetId: !ImportValue
+        "Fn::Sub": "${NetworkStackName}-PublicSubnet1"
+      ImageId: !Ref LatestAmiId
+      SecurityGroupIds:
+        - !ImportValue
+          "Fn::Sub": "${NetworkStackName}-AppSecurityGroup"
+      Tags:
+        - Key: Name
+          Value: rmit-staging-server
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          hostnamectl set-hostname rmit-store-staging
+          dnf update -y
+          dnf install -y git docker python3.11 python3.11-pip
+          curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+          useradd -m ansibleadmin
+          echo "ansibleadmin:AnsibleMaster2767!" | chpasswd
+          echo "ansibleadmin ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          systemctl restart sshd
+          systemctl enable --now docker
+          usermod -aG docker ec2-user
+          usermod -aG docker ansibleadmin
+
+  ProdSwarmManager:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      KeyName: !Ref KeyPairName
+      IamInstanceProfile: !ImportValue
+        "Fn::Sub": "${DataStackName}-EC2InstanceProfile"
+      SubnetId: !ImportValue
+        "Fn::Sub": "${NetworkStackName}-PublicSubnet1"
+      SecurityGroupIds:
+        - !ImportValue
+          "Fn::Sub": "${NetworkStackName}-AppSecurityGroup"
+      ImageId: !Ref LatestAmiId
+      Tags:
+        - Key: Name
+          Value: rmit-prod-manager
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          hostnamectl set-hostname rmit-prod-manager
+          dnf update -y
+          dnf install -y git docker python3.11 python3.11-pip
+          curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+          useradd -m ansibleadmin
+          echo "ansibleadmin:AnsibleMaster2767!" | chpasswd
+          echo "ansibleadmin ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          systemctl restart sshd
+          systemctl enable --now docker
+          usermod -aG docker ec2-user
+          usermod -aG docker ansibleadmin
+
+  WorkerNode1Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      ImageId: !Ref LatestAmiId
+      KeyName: !Ref KeyPairName
+      IamInstanceProfile: !ImportValue
+        "Fn::Sub": "${DataStackName}-EC2InstanceProfile"
+      SubnetId: !ImportValue
+        "Fn::Sub": "${NetworkStackName}-PublicSubnet1"
+      SecurityGroupIds:
+        - !ImportValue
+          "Fn::Sub": "${NetworkStackName}-AppSecurityGroup"
+      Tags:
+        - Key: Name
+          Value: rmit-worker-1
+
+  WorkerNode2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      ImageId: !Ref LatestAmiId
+      KeyName: !Ref KeyPairName
+      IamInstanceProfile: !ImportValue
+        "Fn::Sub": "${DataStackName}-EC2InstanceProfile"
+      SubnetId: !ImportValue
+        "Fn::Sub": "${NetworkStackName}-PublicSubnet2"
+      SecurityGroupIds:
+        - !ImportValue
+          "Fn::Sub": "${NetworkStackName}-AppSecurityGroup"
+      Tags:
+        - Key: Name
+          Value: rmit-worker-2
+
+  # === 8. LOAD BALANCER & TARGET GROUP ===
+  AppLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: rmit-store-alb
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - !ImportValue
+          "Fn::Sub": "${NetworkStackName}-ALBSecurityGroup"
+      Subnets:
+        - !ImportValue
+          "Fn::Sub": "${NetworkStackName}-PublicSubnet1"
+        - !ImportValue
+          "Fn::Sub": "${NetworkStackName}-PublicSubnet2"
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: rmit-store-tg
+      Port: 80
+      Protocol: HTTP
+      VpcId: !ImportValue
+        "Fn::Sub": "${NetworkStackName}-VPCId"
+      TargetType: instance
+      HealthCheckPath: /healthz/
+      HealthCheckIntervalSeconds: 15
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: "200"
+      Targets:
+        - Id: !Ref WorkerNode1Instance
+          Port: 80
+        - Id: !Ref WorkerNode2Instance
+          Port: 80
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref AppLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
+Outputs:
+  ALBDNSName:
+    Description: Public URL of Application Load Balancer
+    Value: !GetAtt AppLoadBalancer.DNSName
+
+  JenkinsMasterPublicIP:
+    Description: Public IP of Jenkins Master
+    Value: !GetAtt JenkinsMasterInstance.PublicIp
+
+  AnsibleServerPublicIP:
+    Description: Public IP of Ansible Server
+    Value: !GetAtt AnsibleServer.PublicIp
+
+  StagingPublicIP:
+    Description: Public IP of Staging Environment
+    Value: !GetAtt StagingInstance.PublicIp
+
+  ProdManagerPublicIP:
+    Description: Public IP of Production Swarm Manager
+    Value: !GetAtt ProdSwarmManager.PublicIp
+
+  Worker1PublicIP:
+    Description: Public IP of Worker Node 1
+    Value: !GetAtt WorkerNode1Instance.PublicIp
+
+  Worker2PublicIP:
+    Description: Public IP of Worker Node 2
+    Value: !GetAtt WorkerNode2Instance.PublicIp
