@@ -1,12 +1,30 @@
 # Author: Charles
 # RMIT Store - the whole stack on one host.
 #
-#   docker compose --env-file compose.env -f docker-compose.prod.yml up -d --build
+# Build the two images FIRST, then bring the stack up. This file has no
+# `build:` section anywhere: it only runs images, it never produces them.
+#
+#   docker build -f docker/api.Dockerfile    --target runtime -t rmit-api:local .
+#   docker build -f docker/client.Dockerfile                  -t rmit-client:local .
+#
+#   docker compose --env-file compose.env -f docker-compose.prod.yml up -d
 #   docker compose --env-file compose.env -f docker-compose.prod.yml ps
 #   docker compose --env-file compose.env -f docker-compose.prod.yml down
 #   docker compose --env-file compose.env -f docker-compose.prod.yml down -v
 #
-# The -f flag is required every time to specify the production compose file (not the docker-compose.yml, this is dev stack).
+# Both flags are required on EVERY command, not just up:
+#   --env-file  because POSTGRES_PASSWORD below is interpolated into this YAML,
+#               and Compose re-parses the file on each invocation
+#   -f          because without it Compose reads docker-compose.yml, the dev stack
+#
+# Why build is separate from up:
+#   - `docker compose --build` delegates to buildx, which `dnf install docker`
+#     on AL2023 does not provide. Plain `docker build` needs no plugin.
+#   - Production must run the image that was tested, not one rebuilt on the box.
+#     Once Jenkins exists it builds once, tags by commit, and every environment
+#     runs that exact tag. A compose file that can rebuild defeats that.
+#   - Docker Swarm ignores `build:` outright, so swarm/stack.yml cannot have one.
+#     Keeping this file build-free means it already has the shape Swarm needs.
 #
 # Difference from docker-compose.yml:
 #   - config.settings.prod instead of dev: DEBUG off, ALLOWED_HOSTS enforced,
@@ -51,12 +69,8 @@ services:
       retries: 10
 
   # --- Migrations ------------------------------------------------------------
+  # Same image as api - same build, only the command differs.
   migrate:
-    build:
-      context: .
-      dockerfile: docker/api.Dockerfile
-      # Compulsory: stage `test` is at the end of the Dockerfile, so without this line Docker will build stage `test` instead of `runtime`.
-      target: runtime
     image: rmit-api:local
     command: python manage.py migrate --noinput
     # Because S3 is used, instead of having environment:, we use env_file: to load the environment variables from compose.env, which is not committed to git. This is to avoid exposing sensitive information like AWS keys and RDS password in the source code.
@@ -69,11 +83,9 @@ services:
 
   # --- API -------------------------------------------------------------------
   api:
-    build:
-      context: .
-      dockerfile: docker/api.Dockerfile
-      # Compulsory: stage `test` is at the end of the Dockerfile, so without this line Docker will build stage `test` instead of `runtime`.
-      target: runtime
+    # Built by the `docker build --target runtime` command in the header.
+    # `--target runtime` is compulsory: stage `test` sits at the end of
+    # api.Dockerfile, and Docker uses the LAST stage when no target is given.
     image: rmit-api:local
     # env_file instead of environment: to load the environment variables from compose.env, which is not committed to git. This is to avoid exposing sensitive information like AWS keys and RDS password in the source code.
     env_file:
@@ -93,9 +105,6 @@ services:
 
   # --- Frontend --------------------------------------------------------------
   client:
-    build:
-      context: .
-      dockerfile: docker/client.Dockerfile
     image: rmit-client:local
     environment:
       API_BASE_URL: /api

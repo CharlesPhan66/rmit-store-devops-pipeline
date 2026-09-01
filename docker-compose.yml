@@ -1,11 +1,31 @@
 # Author: Charles
 # RMIT Store - the whole stack on one host.
 #
-#   docker compose up -d --build
+# Build the two images FIRST, then bring the stack up. This file has no
+# `build:` section anywhere: it only runs images, it never produces them.
+#
+#   docker build -f docker/api.Dockerfile    --target runtime -t rmit-api:local .
+#   docker build -f docker/client.Dockerfile                  -t rmit-client:local .
+#
+#   docker compose up -d
 #   docker compose ps
 #   docker compose logs -f
 #   docker compose down       # keeps the database
 #   docker compose down -v    # deletes the database too
+#
+# Why the split:
+#   - `docker compose --build` delegates to buildx, which `dnf install docker`
+#     on AL2023 does not provide. Plain `docker build` needs no plugin.
+#   - Building and running are two different jobs. Jenkins builds an image once,
+#     tags it by commit, pushes it, and every environment then runs that exact
+#     image. A compose file that can rebuild on the spot invites a host to run
+#     something no other host has.
+#   - Docker Swarm ignores `build:` outright, so swarm/stack.yml cannot have one.
+#     Keeping this file build-free means it already has the shape Swarm needs.
+#
+# If an image is missing, `up` fails with "Unable to find image ... locally"
+# instead of silently building something. That error is the point: it says
+# build step skipped, not here is a container from who-knows-which commit.
 #
 # Description of the services and how they work together:
 # Creates a Postgres database, runs migrations, starts the Django API, and serves the Vue SPA through nginx. The API is not exposed directly; the SPA proxies requests to it.
@@ -44,17 +64,9 @@ services:
   # Runs once to initialize the database, exits, and the API container is not allowed to start until it succeeds.
   # This is why migrate is in neither the Dockerfile nor an entrypoint: it must run once per release, not once per container.
   #
-  # Same image as api (use the same Dockerfile/image) as it uses the backend to initialize the database, just a different command.
-  # You may get rid of build layer and just use image if you have built the image already
-  # Recommend to find the way to build image separately as compose requires buildx, the buildx plugin is not available for AL2023. So, you can build the image separately and use it in the compose file.
-  # If you build the image separately, you can remove the build section and just use the image section in the migrate service.
-  # Or you can just leave it as it is and get rid of the flag --build in the compose up command. It will use the existing image if it is already built, and build it if it is not.
+  # Same image as api - same Dockerfile, same build, only the command differs.
+  # It runs the backend's own manage.py, so it needs the backend's code.
   migrate:
-    build:
-      context: .
-      dockerfile: docker/api.Dockerfile
-      # Compulsory: stage `test` is at the end of the Dockerfile, so without this line Docker will build stage `test` instead of `runtime`.
-      target: runtime
     image: rmit-api:local
     command: python manage.py migrate --noinput
     environment:
@@ -70,11 +82,9 @@ services:
 
   # --- API -------------------------------------------------------------------
   api:
-    build:
-      context: .
-      dockerfile: docker/api.Dockerfile
-      # Compulsory: stage `test` is at the end of the Dockerfile, so without this line Docker will build stage `test` instead of `runtime`.
-      target: runtime
+    # Built by the `docker build --target runtime` command in the header.
+    # `--target runtime` is compulsory: stage `test` sits at the end of
+    # api.Dockerfile, and Docker uses the LAST stage when no target is given.
     image: rmit-api:local
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.dev
@@ -100,9 +110,6 @@ services:
 
   # --- Frontend --------------------------------------------------------------
   client:
-    build:
-      context: .
-      dockerfile: docker/client.Dockerfile
     image: rmit-client:local
     environment:
       # Same origin as the page itself, so the browser never makes a

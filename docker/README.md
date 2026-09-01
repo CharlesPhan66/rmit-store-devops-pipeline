@@ -95,9 +95,19 @@ depends on this.
 `docker-compose.yml` at the repo root brings up four services — `db`, `migrate`,
 `api`, `client` — from these same two images:
 
+Neither compose file has a `build:` section: they run images, they do not
+produce them. Build first, then bring the stack up.
+
 ```bash
-docker compose up -d --build
+docker build -f docker/api.Dockerfile    --target runtime -t rmit-api:local .
+docker build -f docker/client.Dockerfile                  -t rmit-client:local .
+
+docker compose up -d
 ```
+
+`--target runtime` is not optional. Stage `test` is the last stage in
+`api.Dockerfile`, and Docker builds the last stage when no target is given, so
+omitting it produces the test image — `CMD` is `pytest`, not gunicorn.
 
 It is a **development and CI stack**, not the production topology: dev settings
 and a throwaway Postgres container, no RDS and no S3. What it buys is a stack
