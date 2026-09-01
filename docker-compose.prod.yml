@@ -55,6 +55,8 @@ services:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
+      # Compulsory: stage `test` is at the end of the Dockerfile, so without this line Docker will build stage `test` instead of `runtime`.
+      target: runtime
     image: rmit-api:local
     command: python manage.py migrate --noinput
     # Because S3 is used, instead of having environment:, we use env_file: to load the environment variables from compose.env, which is not committed to git. This is to avoid exposing sensitive information like AWS keys and RDS password in the source code.
@@ -70,6 +72,8 @@ services:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
+      # Compulsory: stage `test` is at the end of the Dockerfile, so without this line Docker will build stage `test` instead of `runtime`.
+      target: runtime
     image: rmit-api:local
     # env_file instead of environment: to load the environment variables from compose.env, which is not committed to git. This is to avoid exposing sensitive information like AWS keys and RDS password in the source code.
     env_file:

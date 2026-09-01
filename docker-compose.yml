@@ -53,6 +53,8 @@ services:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
+      # Compulsory: stage `test` is at the end of the Dockerfile, so without this line Docker will build stage `test` instead of `runtime`.
+      target: runtime
     image: rmit-api:local
     command: python manage.py migrate --noinput
     environment:
@@ -71,6 +73,8 @@ services:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
+      # Compulsory: stage `test` is at the end of the Dockerfile, so without this line Docker will build stage `test` instead of `runtime`.
+      target: runtime
     image: rmit-api:local
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.dev
