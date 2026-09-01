@@ -1,5 +1,7 @@
 # RMIT Store — API image (Django + gunicorn).
 #
+# Author: @CharlesPhan66 (Charles Phan)
+# Last updated: 01/09/2026
 # Please build from the repo root, not app/server/. Tom's application is
 # placed under one level down, so every COPY source carries the app/ prefix:
 #
@@ -85,3 +87,35 @@ CMD ["gunicorn", "config.wsgi:application", \
      "--timeout", "60", \
      "--access-logfile", "-", \
      "--error-logfile", "-"]
+
+# Stage 3. Test: This stage is used for running tests and is not part of the final image.
+# Therefore, to build the final image, please specify the target using the --target flag, e.g., `docker build --target runtime -f docker/api.Dockerfile -t rmit-api:local .`
+# To run tests, build the image with the test target and then run the tests using pytest
+# Do not get confused by this stage and the runtime stage, we need to build 2 images for different purposes
+# We do not put all in the runtime stage because we want to keep the final image small and clean, and we do not want to include test dependencies in the final image running the api
+# Ideally, run test image first, if green, go ahead for the runtime image. 
+# Use --rm to run container one-time-and-delete to test, a long-living container is not needed
+# Sorry for the long comment, but you can learn quickly by reading this as I have spent a lot of time figuring out how to make this work
+# I hope you can learn from my experience and save time.
+FROM builder AS test
+
+ENV PATH="/opt/venv/bin:$PATH" \
+    DJANGO_SETTINGS_MODULE=config.settings.dev \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /repo
+
+# Copy the requirements-dev.txt file with the same structure as the source code into the image to ensure the requirements-dev refers to the correct location of the requirements.txt file
+COPY app/server/requirements.txt app/server/requirements.txt
+COPY requirements-dev.txt .
+RUN pip install -r requirements-dev.txt
+
+# Copy the source code
+COPY app/server/ app/server/
+
+# Because they sit outside the app/server folder
+COPY pytest.ini ./
+COPY tests/ tests/
+
+CMD ["pytest"]
