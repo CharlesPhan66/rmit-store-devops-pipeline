@@ -1,0 +1,178 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "RMIT Store Infrastructure - Databases, Storage & ECR"
+
+Parameters:
+  NetworkStackName:
+    Type: String
+    Default: rmit-store-network
+    Description: Name of the parent network stack for importing VPC and Subnets
+
+  DBUsername:
+    Type: String
+    Description: Master username for RDS PostgreSQL
+    Default: rmit
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: Master password for RDS PostgreSQL
+    MinLength: 8
+    Default: RmitStoreDB2767Password!
+
+  DjangoSecretKey:
+    Type: String
+    NoEcho: true
+    Description: Django application SECRET_KEY
+    Default: django-insecure-rmit-store-super-secret-key-2026!
+
+Resources:
+  # === 3. ECR REPOSITORIES ===
+  ApiRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: rmit-store-api
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  ClientRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: rmit-store-client
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  # === 4. S3 STORAGE ===
+  S3MediaBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "rmit-store-media-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      VersioningConfiguration:
+        Status: Enabled
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ["*"]
+            AllowedMethods: ["GET", "HEAD"]
+            AllowedOrigins: ["*"]
+            MaxAge: 3000
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3MediaBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: "*"
+            Action: "s3:GetObject"
+            Resource: !Sub
+              - "${BucketArn}/*"
+              - BucketArn: !GetAtt S3MediaBucket.Arn
+
+  # === 5. SSM PARAMETER STORE FOR SECRETS ===
+  DbPasswordParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /rmit-store/production/db-password
+      Type: String
+      Value: !Ref DBPassword
+      Description: RDS PostgreSQL master password
+
+  DbUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /rmit-store/production/DATABASE_URL
+      Type: String
+      Value: !Sub
+        - "postgres://${DBUsername}:${DBPassword}@${DBEndpoint}:5432/rmit_store"
+        - DBEndpoint: !GetAtt RDSInstance.Endpoint.Address
+      Description: Full PostgreSQL database connection URL
+
+  S3BucketParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /rmit-store/s3/STORAGE_BUCKET_NAME
+      Type: String
+      Value: !Ref S3MediaBucket
+      Description: Shared S3 bucket name for Django
+
+  AllowedHostsParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /rmit-store/production/ALLOWED_HOSTS
+      Type: String
+      Value: "*,.amazonaws.com,localhost,127.0.0.1,10.0.0.0/16,.compute.internal"
+      Description: Allowed host whitelist mitigating DisallowedHost health check faults
+
+  SecretKeyParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /rmit-store/production/DJANGO_SECRET_KEY
+      Type: String
+      Value: !Ref DjangoSecretKey
+      Description: Django production secret key SSM reference
+
+  # === 6. DATABASE ===
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS Instance
+      SubnetIds:
+        - !ImportValue
+          Fn::Sub: "${NetworkStackName}-PrivateSubnet1"
+        - !ImportValue
+          Fn::Sub: "${NetworkStackName}-PrivateSubnet2"
+
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    Properties:
+      DBInstanceIdentifier: rmit-store-db
+      Engine: postgres
+      EngineVersion: "16.9"
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: 20
+      StorageType: gp3
+      DBName: rmit_store
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !ImportValue
+          Fn::Sub: "${NetworkStackName}-DBSecurityGroup"
+      PubliclyAccessible: false
+      MultiAZ: false
+
+Outputs:
+  RDSEndpoint:
+    Value: !GetAtt RDSInstance.Endpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-RDSEndpoint"
+
+  S3BucketName:
+    Value: !Ref S3MediaBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-S3BucketName"
+
+  EC2InstanceProfile:
+    Value: "LabInstanceProfile"
+    Export:
+      Name: !Sub "${AWS::StackName}-EC2InstanceProfile"
+
+  ApiECRRepoURI:
+    Value: !GetAtt ApiRepository.RepositoryUri
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiECRRepoURI"
+
+  ClientECRRepoURI:
+    Value: !GetAtt ClientRepository.RepositoryUri
+    Export:
+      Name: !Sub "${AWS::StackName}-ClientECRRepoURI"
