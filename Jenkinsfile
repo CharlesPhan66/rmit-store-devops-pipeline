@@ -60,7 +60,7 @@ pipeline {
                         docker rm -f ci-db-${env.BUILD_NUMBER} || true
                         docker network rm ci-${env.BUILD_NUMBER} || true
                     """
-                    junit allowEmptyResults: true, testResults: 'reports/*.xml'
+                    junit allowEmptyResults: false, testResults: 'reports/*.xml'
                 }
             }
         }
