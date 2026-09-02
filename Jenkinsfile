@@ -1,7 +1,11 @@
+// Author: @CharlesPhan66 (Charles Phan)
+// Last updated: 2/9/2026
 pipeline {
     agent any
 
     environment {
+        // Uncomment and fill in the following if you want to push to Docker Hub instead of ECR. The three image: lines in docker-compose.prod.yml and the login block in deploy.sh must match it.
+        // DOCKER_NS = ''
         AWS_REGION = 'us-east-1'
         ECR = '222431607375.dkr.ecr.us-east-1.amazonaws.com'
         STAGING = 'ec2-user@172.31.90.253'
@@ -68,6 +72,23 @@ pipeline {
             }
         }
 
+        // Pushes to Amazon ECR. Note what is absent: no withCredentials, no static
+        // token. `aws` gets a 12-hour token from this instance's profile, which is
+        // the reason for using ECR over Docker Hub - every other part of this
+        // project already dropped its static keys.
+        //
+        // Requires on the Jenkins host: the aws CLI, and an instance profile with
+        // ECR permissions (LabInstanceProfile on Learner Lab).
+        //
+        // The Docker Hub equivalent, if you ever switch back, needs the static
+        // token restored:
+        //   withCredentials([usernamePassword(credentialsId: 'dockerhub',
+        //         usernameVariable: 'U', passwordVariable: 'P')]) {
+        //     sh 'echo "$P" | docker login -u "$U" --password-stdin'
+        //   }
+        // Whichever you pick, the three image: lines in docker-compose.prod.yml
+        // and the login block in deploy.sh must match it.
+        // REPLACE: prefix ${ECR} with ${DOCKER_NS} that you filled in above if you prefer Docker Hub (PM prefers ECR ^^)
         stage('Push Images') {
             steps {
                 sh """

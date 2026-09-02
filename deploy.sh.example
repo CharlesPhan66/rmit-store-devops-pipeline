@@ -1,0 +1,79 @@
+#!/bin/bash
+#
+# Author: @CharlesPhan66 (Charles Phan)
+#
+# TEMPLATE. Copy this onto the app host and fill in the placeholders:
+# Jenkins will SSH to the host and run this script, passing the SHA to deploy
+#
+#     scp deploy.example.sh ec2-user@<APP-HOST>:~/deploy.sh
+#     OR already had the repo on the host, then copy it from there:
+#     cp <REPO>/deploy.sh.example ~/deploy.sh
+#     Then refer set it up yourself
+#
+# The working copy is ~/deploy.sh and is NOT committed: REPO below is this
+# machine's own layout, and compose.env beside it holds secrets. This file is
+# the committed template, so a rebuilt host does not start from a blank page.
+#
+# It also lives OUTSIDE the checkout on purpose. This script runs
+# `git checkout`, which rewrites tracked files, and bash reads a script
+# incrementally - a script that checks out over itself can execute garbage
+# halfway through.
+#
+# Deploy one release of RMIT Store on this host.
+# Called by Jenkins over SSH:  GIT_SHA=<sha> ~/deploy.sh
+#
+# The flow is: Jenkins knows the SHA to deploy -> SSH here and passes it ->
+# this script checks out that SHA -> docker compose reads the right tag.
+
+set -euo pipefail
+
+# --- Fill this in -----------------------------------------------------------
+REPO="$HOME/<REPO-DIRECTORY-NAME>"
+
+# Fail loudly rather than silently deploying whatever is checked out.
+# If Jenkins passes no GIT_SHA, the script exits with an error.
+: "${GIT_SHA:?GIT_SHA is required}"
+
+# This cd goes to the repo root, which is where docker-compose.prod.yml lives.
+cd "$REPO"
+
+# Match the working tree to the commit being deployed: docker-compose.prod.yml
+# and the nginx conf are read from disk, so they must match this release.
+git fetch origin
+git checkout "$GIT_SHA"
+
+# Consumed by ${IMAGE_TAG} in docker-compose.prod.yml.
+export IMAGE_TAG="$GIT_SHA"
+
+# --- Registry authentication ------------------------------------------------
+# >>> As committed, docker-compose.prod.yml points at Amazon ECR, so the block
+# >>> below MUST be uncommented. Leave it commented only if you have switched
+# >>> those three image: lines back to a PUBLIC Docker Hub repository, which
+# >>> needs no login to pull.
+#
+# Uncomment for ECR, or for a private Docker Hub repository.
+# Log in on EVERY deploy, not once: an ECR token is valid for 12 hours, so a
+# one-off login works all day and then fails the next morning with
+# `no basic auth credentials` - a symptom that sends you looking in the wrong
+# place. The login costs well under a second.
+#
+# This needs the aws CLI on the host (`dnf install -y awscli-2`) and an
+# instance profile attached (LabInstanceProfile on Learner Lab). No static AWS
+# keys anywhere: that is the whole point of using ECR over Docker Hub.
+#
+# AWS_REGION=<AWS-REGION>
+# ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+# aws ecr get-login-password --region "$AWS_REGION" \
+#   | docker login --username AWS --password-stdin \
+#       "${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+# --- Release ----------------------------------------------------------------
+# Pull the images Jenkins already built and pushed, then start the stack.
+# Nothing is built here: production runs the exact image that passed its tests,
+# never one rebuilt on the box.
+docker compose --env-file compose.env -f docker-compose.prod.yml pull
+docker compose --env-file compose.env -f docker-compose.prod.yml up -d --remove-orphans
+
+# -f only, never -af: -af would delete the older :<sha> tags, and those tags are
+# the only way back. Rolling back is then this same script with an older SHA.
+docker image prune -f

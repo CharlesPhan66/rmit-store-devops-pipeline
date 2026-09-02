@@ -70,6 +70,24 @@ services:
       timeout: 3s
       retries: 10
 
+  # --- Registry ---------------------------------------------------------------
+  # All three application services below pull from Amazon ECR. The registry host
+  # is <account-id>.dkr.ecr.<region>.amazonaws.com, and ${IMAGE_TAG} is exported
+  # by deploy.sh (see deploy.sh.example) from the commit Jenkins is deploying.
+  #
+  # Switching registries means editing all THREE image: lines, never just one.
+  # `migrate` and `api` must always be the same image: migrate runs that
+  # backend's own manage.py, so a mismatch migrates with one release's schema and
+  # then serves another release's code.
+  #
+  # To go back to Docker Hub:
+  #   image: <dockerhub-user>/rmit-api:${IMAGE_TAG:-latest}
+  # A public Docker Hub repo needs no login to pull. ECR always does - see the
+  # commented block in deploy.example.sh, and note the token expires after 12h.
+  #
+  # ${IMAGE_TAG:-latest} keeps a hand-typed `docker compose up` working when the
+  # variable is unset, which is useful while debugging.
+
   # --- Migrations ------------------------------------------------------------
   # Same image as api - same build, only the command differs.
   migrate:
