@@ -51,7 +51,7 @@ pipeline {
                         -e DATABASE_URL=postgres://rmit:rmit@ci-db-${env.BUILD_NUMBER}:5432/rmit_store \
                         -v "\$PWD/reports:/repo/reports" \
                         rmit-api:test-${env.SHA} pytest -m "unit or integration" \
-                        --junitxml=/reports/backend.xml
+                        --junitxml=reports/backend.xml
                 """
             }
             post {
