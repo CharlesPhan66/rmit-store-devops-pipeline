@@ -67,7 +67,7 @@ services:
   # Same image as api - same Dockerfile, same build, only the command differs.
   # It runs the backend's own manage.py, so it needs the backend's code.
   migrate:
-    image: charlesphan66/rmit-api:${IMAGE_TAG:-latest}
+    image: rmit-api:local
     command: python manage.py migrate --noinput
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.dev
