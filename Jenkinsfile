@@ -152,7 +152,7 @@ pipeline {
                                 --restart-condition none \
                                 --secret SECRET_KEY \
                                 --secret DATABASE_URL \
-                                --env DJANGO_SETTINGS_MODULE=store.settings.prod \
+                                --env DJANGO_SETTINGS_MODULE=config.settings.prod \
                                 --env ALLOWED_HOSTS=127.0.0.1 \
                                 --with-registry-auth \
                                 ${ECR}/rmit-api:${env.SHA} python manage.py migrate --noinput
