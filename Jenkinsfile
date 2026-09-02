@@ -2,7 +2,8 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_NS = 'charlesphan66'
+        AWS_REGION = 'us-east-1'
+        ECR = '222431607375.dkr.ecr.us-east-1.amazonaws.com'
         STAGING = 'ec2-user@172.31.90.253'
         STAGING_URL = 'http://172.31.90.253:8081'
     }
@@ -69,17 +70,16 @@ pipeline {
 
         stage('Push Images') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub',
-                    usernameVariable: 'U', passwordVariable: 'P')]) {
-                        sh """
-                            echo "\$P" | docker login -u "\$U" --password-stdin
-                            docker tag rmit-api:${env.SHA} ${DOCKER_NS}/rmit-api:${env.SHA}
-                            docker tag rmit-client:${env.SHA} ${DOCKER_NS}/rmit-client:${env.SHA}
-                            docker push ${DOCKER_NS}/rmit-api:${env.SHA}
-                            docker push ${DOCKER_NS}/rmit-client:${env.SHA}
-                            docker logout
-                        """
-                    }
+                sh """
+                    aws ecr get-login-password --region ${AWS_REGION} \
+                        | docker login --username AWS --password-stdin ${ECR}
+                    
+                    docker tag rmit-api:${env.SHA} ${ECR}/rmit-api:${env.SHA}
+                    docker tag rmit-client:${env.SHA} ${ECR}/rmit-client:${env.SHA}
+
+                    docker push ${ECR}/rmit-api:${env.SHA}
+                    docker push ${ECR}/rmit-client:${env.SHA}
+                """
             }
         }
 

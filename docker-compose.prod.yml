@@ -42,6 +42,8 @@
 # what production actually looks like. The dev stack keeps its db container
 # because its job is to come up anywhere Docker runs, with no AWS at all.
 
+# Migrate docker hub to ecr: docker tag charlesphan66/rmit-api:latest 123456789012.dkr.ecr.ap-southeast-2.amazonaws.com/rmit-api:latest
+
 name: rmit-store-prod
 
 services:
@@ -71,7 +73,7 @@ services:
   # --- Migrations ------------------------------------------------------------
   # Same image as api - same build, only the command differs.
   migrate:
-    image: charlesphan66/rmit-api:${IMAGE_TAG:-latest}
+    image: 222431607375.dkr.ecr.us-east-1.amazonaws.com/rmit-api:${IMAGE_TAG:-latest}
     command: python manage.py migrate --noinput
     # Because S3 is used, instead of having environment:, we use env_file: to load the environment variables from compose.env, which is not committed to git. This is to avoid exposing sensitive information like AWS keys and RDS password in the source code.
     env_file:
@@ -86,7 +88,7 @@ services:
     # Built by the `docker build --target runtime` command in the header.
     # `--target runtime` is compulsory: stage `test` sits at the end of
     # api.Dockerfile, and Docker uses the LAST stage when no target is given.
-    image: charlesphan66/rmit-api:${IMAGE_TAG:-latest}
+    image: 222431607375.dkr.ecr.us-east-1.amazonaws.com/rmit-api:${IMAGE_TAG:-latest}
     # env_file instead of environment: to load the environment variables from compose.env, which is not committed to git. This is to avoid exposing sensitive information like AWS keys and RDS password in the source code.
     env_file:
       - ./compose.env
@@ -105,7 +107,7 @@ services:
 
   # --- Frontend --------------------------------------------------------------
   client:
-    image: charlesphan66/rmit-client:${IMAGE_TAG:-latest}
+    image: 222431607375.dkr.ecr.us-east-1.amazonaws.com/rmit-client:${IMAGE_TAG:-latest}
     environment:
       API_BASE_URL: /api
     volumes:
