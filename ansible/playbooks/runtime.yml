@@ -1,0 +1,7 @@
+---
+- name: Configure application runtime on G3 targets
+  hosts: g3_targets
+  become: true
+
+  roles:
+    - app_runtime

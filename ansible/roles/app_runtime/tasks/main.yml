@@ -1,0 +1,7 @@
+---
+# tasks file for ansible/roles/app_runtime
+- name: Install application runtime and PostgreSQL client
+  ansible.builtin.dnf:
+    name: "{{ runtime_packages }}"
+    state: present
+    update_cache: true
