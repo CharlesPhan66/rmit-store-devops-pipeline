@@ -71,7 +71,7 @@ services:
   # --- Migrations ------------------------------------------------------------
   # Same image as api - same build, only the command differs.
   migrate:
-    image: rmit-api:local
+    image: charlesphan66/rmit-api:${IMAGE_TAG:-latest}
     command: python manage.py migrate --noinput
     # Because S3 is used, instead of having environment:, we use env_file: to load the environment variables from compose.env, which is not committed to git. This is to avoid exposing sensitive information like AWS keys and RDS password in the source code.
     env_file:
