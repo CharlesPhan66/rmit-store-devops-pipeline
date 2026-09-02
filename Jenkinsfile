@@ -122,7 +122,6 @@ Log: ${env.BUILD_URL}console
 Production not touched. Staging may be broken. Please check the staging server at ${STAGING_URL}.
                 """,
                 to: '$DEFAULT_RECIPIENTS',
-                attachLog: true
             )
         }
         fixed {
