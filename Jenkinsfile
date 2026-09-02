@@ -15,6 +15,7 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
+                sh 'rm -rf reports && mkdir -p reports'
                 script {
                     env.SHA = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
                 }
@@ -60,7 +61,7 @@ pipeline {
                         docker rm -f ci-db-${env.BUILD_NUMBER} || true
                         docker network rm ci-${env.BUILD_NUMBER} || true
                     """
-                    junit allowEmptyResults: false, testResults: 'reports/*.xml'
+                    junit allowEmptyResults: false, testResults: 'reports/backend.xml'
                 }
             }
         }
@@ -119,7 +120,17 @@ pipeline {
 Commit: ${env.SHA}
 Log: ${env.BUILD_URL}console
 
-Production not touched. Staging may be broken. Please check the staging server at ${STAGING_URL}.
+Production not touched.
+                """,
+                to: '$DEFAULT_RECIPIENTS',
+            )
+        }
+        unstable {
+            emailext(
+                subject: "UNSTABLE: ${env.JOB_NAME} #${env.BUILD_NUMBER} (${env.SHA})",
+                body: """Build unstable at stage: ${env.STAGE_NAME}
+Commit: ${env.SHA}
+Log: ${env.BUILD_URL}console coverage may be low. Staging may be broken.
                 """,
                 to: '$DEFAULT_RECIPIENTS',
             )
