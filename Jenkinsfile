@@ -64,5 +64,21 @@ pipeline {
                 }
             }
         }
+
+        stage('Push Images') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub',
+                    usernameVariable: 'U', passwordVariable: 'P')]) {
+                        sh """
+                            echo "$P" | docker login -u "$U" --password-stdin
+                            docker tag rmit-api:${env.SHA} ${DOCKER_NS}/rmit-api:${env.SHA}
+                            docker tag rmit-client:${env.SHA} ${DOCKER_NS}/rmit-client:${env.SHA}
+                            docker push ${DOCKER_NS}/rmit-api:${env.SHA}
+                            docker push ${DOCKER_NS}/rmit-client:${env.SHA}
+                            docker logout
+                        """
+                    }
+            }
+        }
     }
 }
