@@ -144,7 +144,7 @@ pipeline {
             steps {
                 sshagent(['app-host-key']) {
                     sh """
-                        ssh -o StrictHostKeyChecking=no ec2-user@SWARM_MGR '
+                        ssh -o StrictHostKeyChecking=no ${SWARM_MGR} '
                             set -e
                             docker service rm rmit-migrate 2>/dev/null || true
 
