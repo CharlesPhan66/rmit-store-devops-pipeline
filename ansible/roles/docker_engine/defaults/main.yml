@@ -1,0 +1,7 @@
+---
+docker_package_name: docker
+docker_service_name: docker
+docker_group_name: docker
+
+docker_users:
+  - ec2-user

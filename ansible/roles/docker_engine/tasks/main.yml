@@ -1,17 +1,18 @@
 ---
 - name: Install the required container engine
   ansible.builtin.dnf:
-    name: docker
+    name: "{{ docker_package_name }}"
     state: present
 
 - name: Start and enable the container service
   ansible.builtin.service:
-    name: docker
+    name: "{{ docker_service_name }}"
     state: started
     enabled: true
 
 - name: Add the EC2 login user to the container group
   ansible.builtin.user:
-    name: ec2-user
-    groups: docker
+    name: "{{ item }}"
+    groups: "{{ docker_group_name }}"
     append: true
+  loop: "{{ docker_users }}"
