@@ -80,5 +80,57 @@ pipeline {
                     }
             }
         }
+
+        stage('Deploy Staging') {
+            steps {
+                sshagent(['app-host-key']) {
+                    sh """
+                        ssh -o StrictHostKeyChecking=no ${STAGING} \
+                            'GIT_SHA=${env.SHA} ~/deploy.sh'
+                    """
+                }
+            }
+        }
+
+        stage('Smoke staging') {
+            steps {
+                sh """
+                    docker run --rm --network host \
+                        -e BASE_URL=${STAGING_URL} \
+                        -e GIT_SHA=${env.SHA} \
+                        -v "\$PWD/reports:/repo/reports" \
+                        rmit-api:test-${env.SHA} pytest tests/smoke --junitxml=reports/smoke.xml
+                """
+            }
+            post {
+                always {
+                    junit 'reports/smoke.xml'
+                }
+            }
+        }
+    }
+
+    post {
+        failure {
+            emailText(
+                subject: "FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER} (${env.SHA})",
+                body: """Build failed at stage: ${env.STAGE_NAME}
+
+Commit: ${env.SHA}
+Log: ${env.BUILD_URL}console
+
+Production not touched. Staging may be broken. Please check the staging server at ${STAGING_URL}.
+                """,
+                to: '$DEFAULT_RECIPIENTS',
+                attachLog: true
+            )
+        }
+        fixed {
+            emailText(
+                subject: "RECOVERED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: "Pipeline is recovered to commit ${env.SHA}. \n${env.BUILD_URL}",
+                to: '$DEFAULT_RECIPIENTS',
+            )
+        }
     }
 }
