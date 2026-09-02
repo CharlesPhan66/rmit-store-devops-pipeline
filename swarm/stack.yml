@@ -1,0 +1,78 @@
+version: "3.8"
+
+services:
+
+  api:
+    image: ${ECR}/rmit-api:${GIT_SHA}
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.prod
+      ALLOWED_HOSTS: "rmit-alb-1002033451.us-east-1.elb.amazonaws.com,127.0.0.1"
+      USE_S3: "True"
+      # MODIFY THIS TO USE THE FINAL S3 BUCKET NAME YOU CREATE IN THE AWS CONSOLE
+      AWS_STORAGE_BUCKET_NAME: "rmit-store-media-s4131861-test-1"
+      AWS_S3_REGION_NAME: "us-east-1"
+      # IN THE ORIGINAL ENV FILE, GIT_COMMIT IS SUPPOSED TO BE SET TO THE GIT SHA OF THE COMMIT THAT BUILT THE IMAGE
+      # JENKINS WILL SET THIS ENV VAR AUTOMATICALLY WHEN IT BUILDS THE IMAGE, SO YOU CAN LEAVE IT AS IS
+      GIT_COMMIT: ${GIT_SHA}
+    secrets:
+      # SECRET_KEY & DATABASE_URL ARE REQUIRED IN THE DJANGO ENV
+      # BUT USING SWARM CANNOT SET --env-file as COMPOSE DOES
+      # So we use secrets (Make sure it's created in the swarm manager first, run docker secret ls to check)
+      - SECRET_KEY
+      - DATABASE_URL
+    networks: [rmit]
+    deploy:
+      replicas: 3  # Tính luôn manager node
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+        monitor: 30s
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+  
+  client:
+    image: ${ECR}/rmit-client:${GIT_SHA}
+    environment:
+      API_BASE_URL: /api
+    configs:
+      - source: nginx-conf
+        target: /etc/nginx/conf.d/default.conf
+    ports:
+      - "80:80"
+    networks: [rmit]
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        order: start-first
+
+secrets:
+  # External: Swarm doesn't create it in run-time, it must be created in the swarm manager first by you
+  SECRET_KEY:
+    external: true
+  DATABASE_URL:
+    external: true
+
+# This is the same as bind mounting a file in docker-compose
+configs:
+  nginx-conf:
+    file: ../docker/client-nginx-compose.conf
+
+# In compose, networks are created automatically
+# In swarm, cuz you have multiple instances as nodes, you need to create an overlay network for the services to communicate across nodes
+networks:
+  rmit:
+    driver: overlay

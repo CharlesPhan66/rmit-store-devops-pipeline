@@ -10,6 +10,8 @@ pipeline {
         ECR = '222431607375.dkr.ecr.us-east-1.amazonaws.com'
         STAGING = 'ec2-user@172.31.90.253'
         STAGING_URL = 'http://172.31.90.253:8081'
+        SWARM_MGR = 'ec2-user@172.31.23.29'
+        PROD_URL = 'http://rmit-alb-1002033451.us-east-1.elb.amazonaws.com'
     }
 
     options {
@@ -128,6 +130,96 @@ pipeline {
             post {
                 always {
                     junit 'reports/smoke.xml'
+                }
+            }
+        }
+
+        stage('Migrate prod') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'charles/self-work'
+                }
+            }
+            steps {
+                sshagent(['app-host-key']) {
+                    sh """
+                        ssh -o StrictHostKeyChecking=no ec2-user@SWARM_MGR '
+                            set -e
+                            docker service rm rmit-migrate 2>/dev/null || true
+
+                            docker service create --name rmit-migrate --detach \
+                                --restart-condition none \
+                                --secret SECRET_KEY \
+                                --secret DATABASE_URL \
+                                --env DJANGO_SETTINGS_MODULE=store.settings.prod \
+                                --env ALLOWED_HOSTS=127.0.0.1 \
+                                --with-registry-auth \
+                                ${ECR}/rmit-api:${env.SHA} python manage.py migrate --noinput
+
+                            for i in \$(seq 1 60); do
+                                STATE=\$(docker service ps rmit-migrate --format '{{.CurrentState}}' | head -n1)
+                                case "\$STATE" in
+                                    Complete*) echo "Migration complete"; break;;
+                                    Failed*|Rejected*)
+                                        docker service logs rmit-migrate
+                                        docker service rm rmit-migrate
+                                        exit 1 ;;
+                                esac
+                                sleep 5
+                            done
+
+                            docker service logs rmit-migrate
+                            docker service rm rmit-migrate
+                        '
+                    """
+                }
+            }
+        }
+
+        stage('Deploy prod (Swarm)') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'charles/self-work'
+                }
+            }
+            steps {
+                sshagent(['app-host-key']) {
+                    sh """
+                        ssh -o StrictHostKeyChecking=no ${SWARM_MGR} 'mkdir -p ~/deploy/swarm ~/deploy/docker'
+                        scp -o StrictHostKeyChecking=no swarm/stack.yml ${SWARM_MGR}:~/deploy/swarm/
+                        scp -o StrictHostKeyChecking=no docker/client-nginx-compose.conf ${SWARM_MGR}:~/deploy/docker/
+
+                        ssh -o StrictHostKeyChecking=no ${SWARM_MGR} '
+                            cd ~/deploy &&
+                            ECR=${ECR} GIT_SHA=${env.SHA} docker stack deploy \
+                                -c swarm/stack.yml --with-registry-auth rmit
+                        '
+                    """
+                }
+            }
+        }
+
+        stage('Smoke prod') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'charles/self-work'
+                }
+            }
+            steps {
+                sh """
+                    docker run --rm --network host \
+                        -e BASE_URL=${PROD_URL} \
+                        -e GIT_SHA=${env.SHA} \
+                        -v "\$PWD/reports:/repo/reports" \
+                        rmit-api:test-${env.SHA} pytest tests/smoke --junitxml=reports/smoke-prod.xml
+                """
+            }
+            post {
+                always {
+                    junit 'reports/smoke-prod.xml'
                 }
             }
         }

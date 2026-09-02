@@ -13,6 +13,7 @@ under `app/` and each build needs to reach into it.
 | `userdata-api.sh` | — | — | EC2 user data for the API host: hostname, Docker, git |
 | `userdata-client.sh` | — | — | the same, for the frontend host |
 | `userdata-jenkins.sh` | — | — | the Jenkins controller: `/tmp` resize, Java 21, Docker, Jenkins |
+| `userdata-swarm.sh` | — | — | a Swarm node: Docker, ECR credential helper, Jenkins deploy key. Template — fill in `NODE_NAME` and `JENKINS_PUBKEY` |
 
 Paste one into the launch wizard under **Advanced details → User data**, or pass
 `--user-data file://docker/userdata-api.sh` to `aws ec2 run-instances`. They run
@@ -39,6 +40,22 @@ obvious and each one costs an hour if missed:
 It provisions the host, not Jenkins itself. Unlocking, plugins, credentials,
 SMTP and the job are still done through the web UI; the script ends with that
 list in a comment.
+
+`userdata-swarm.sh` is the same script for every node in the cluster — manager
+and worker differ only in which `docker swarm` command you run afterwards. It
+refuses to boot with its placeholders unfilled, which is better than a node that
+looks healthy until it cannot join. Two things in it are worth knowing:
+
+- **The ECR credential helper.** `docker stack deploy --with-registry-auth`
+  copies the manager's registry credentials to the workers *at deploy time*, and
+  an ECR token lasts 12 hours. After that any task Swarm restarts — a crashed
+  container, a rebooted node — pulls with an expired token and fails with
+  `no basic auth credentials`, with no deploy running to blame. The helper asks
+  for a fresh token on every pull instead, using the instance profile.
+- **The swarm join token is deliberately absent.** It is a secret: anyone holding
+  it with a route to port 2377 can join the cluster and run containers in it.
+  User data is readable by any process inside the instance, so joining stays a
+  manual step.
 
 ## Build
 

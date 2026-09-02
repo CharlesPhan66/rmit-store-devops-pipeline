@@ -78,6 +78,10 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
   CMD python -c "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz/', timeout=2).status == 200 else 1)"
 
+
+COPY docker/api-entrypoint.sh /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
 # NOTE: no migrate here, and none in an entrypoint either. Migrations change
 # shared state that lives outside the container; N replicas each running them
 # at boot is a race. They are a one-shot job per release — see plan-d.
