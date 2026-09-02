@@ -112,7 +112,7 @@ pipeline {
 
     post {
         failure {
-            emailText(
+            emailext(
                 subject: "FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER} (${env.SHA})",
                 body: """Build failed at stage: ${env.STAGE_NAME}
 
@@ -126,7 +126,7 @@ Production not touched. Staging may be broken. Please check the staging server a
             )
         }
         fixed {
-            emailText(
+            emailext(
                 subject: "RECOVERED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                 body: "Pipeline is recovered to commit ${env.SHA}. \n${env.BUILD_URL}",
                 to: '$DEFAULT_RECIPIENTS',
