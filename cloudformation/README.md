@@ -2,6 +2,12 @@
 
 This directory contains the CloudFormation templates and automation scripts for provisioning the three-tier AWS architecture for the RMIT Store application.
 
+## Enterprise Production CI/CD Architecture Overview
+
+![Enterprise Production CI/CD Architecture Overview](./images/architecture-overview.png)
+
+---
+
 ## Prerequisites
 
 - Access to AWS Academy / AWS Management Console with CloudShell enabled.
@@ -45,6 +51,8 @@ Upon executing the `aws-capability-check.sh` script, the deployment will automat
 - **SSM Parameter Store Verification**: Retrieves and displays all key-value secrets stored under the `/rmit-store` namespace in a formatted terminal table.
 - **RDS Network Isolation**: Performs a network connectivity test (`nc -zv -w 3 <RDS_ENDPOINT> 5432`). The operation times out as expected, proving that the PostgreSQL database is isolated within private subnets and unreachable directly from the public internet.
 
-### Deployment Verification Screenshot
+---
+
+## Deployment Verification Screenshot
 
 ![AWS CloudShell Deployment Verification](./images/deployment-verification.png)
