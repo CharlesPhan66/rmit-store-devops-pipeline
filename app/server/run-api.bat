@@ -1,0 +1,1 @@
+docker run -d --name rmit-api-test -p 8000:8000 -e DATABASE_URL=postgres://rmit:rmit@host.docker.internal:5432/rmit_store -e SECRET_KEY=test-secret-key-for-docker -e ALLOWED_HOSTS=localhost,127.0.0.1 -e DJANGO_SETTINGS_MODULE=config.settings.dev rmit-store-api
