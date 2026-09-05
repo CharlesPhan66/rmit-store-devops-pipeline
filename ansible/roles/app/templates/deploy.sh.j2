@@ -29,8 +29,8 @@
 
 set -euo pipefail
 
-# --- Fill this in -----------------------------------------------------------
 REPO="{{ repo_dir }}"
+AWS_REGION={{ aws_region }}
 
 # Fail loudly rather than silently deploying whatever is checked out.
 # If Jenkins passes no GIT_SHA, the script exits with an error.
@@ -63,7 +63,6 @@ export IMAGE_TAG="$GIT_SHA"
 # instance profile attached (LabInstanceProfile on Learner Lab). No static AWS
 # keys anywhere: that is the whole point of using ECR over Docker Hub.
 
-AWS_REGION={{ aws_region }}
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 aws ecr get-login-password --region "$AWS_REGION" \
 | docker login --username AWS --password-stdin \
