@@ -1,0 +1,24 @@
+---
+# Variables for the staging host. The group name comes from the EC2 tag
+# Role=staging, so renaming the machine itself changes nothing here.
+#
+# Only repo_url is typed by hand. Everything else is derived from the inventory
+# or read from SSM, so this file survives the infrastructure being rebuilt with
+# different addresses.
+
+ssm_prefix: /rmit/staging
+
+repo_url: git@github.com:rmit-vietnam-computing-technologies/2026b-cosc2767-a2-sg-team-13.git
+
+# "…/repo-name.git" -> "/home/ec2-user/repo-name"
+repo_dir: "/home/ec2-user/{{ repo_url.split('/')[-1] | replace('.git', '') }}"
+
+# Derived from the inventory, so no IP is ever written down. ansible_host is the
+# private IP the aws_ec2 plugin returned — the same address the Jenkins smoke
+# stage calls, which is exactly what ALLOWED_HOSTS has to contain.
+allowed_hosts: "{{ ansible_host }},127.0.0.1,localhost"
+client_url: "http://{{ ansible_host }}:8081"
+
+# Written to SSM by CloudFormation in part 5. Until then, put it there by hand:
+#   aws ssm put-parameter --name /rmit/staging/MEDIA_BUCKET --type String --value <bucket>
+media_bucket: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/MEDIA_BUCKET') }}"

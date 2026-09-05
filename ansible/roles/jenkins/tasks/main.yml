@@ -1,0 +1,44 @@
+---
+# This replaces the user data of jenkins server
+- name: Grow /tmp so the Jenkins node monitor stays happy
+  ansible.posix.mount:
+    path: /tmp
+    src: tmpfs
+    fstype: tmpfs
+    opts: defaults,size=3G
+    state: mounted
+
+# Java 21
+- name: Install Java 21
+  ansible.builtin.dnf:
+    name: java-21-amazon-corretto
+    state: present
+
+- name: Add the Jenkins repository
+  ansible.builtin.get_url:
+    url: https://pkg.jenkins.io/redhat-stable/jenkins.repo
+    dest: /etc/yum.repos.d/jenkins.repo
+    mode: '0644'
+
+- name: Import the Jenkins repository GPG key
+  ansible.builtin.rpm_key:
+    key: https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
+    state: present
+
+- name: Install Jenkins
+  ansible.builtin.dnf:
+    name: jenkins
+    state: present
+
+- name: Let the jenkins user reach the docker cli
+  ansible.builtin.user:
+    name: jenkins
+    groups: docker
+    append: true
+  notify: restart jenkins
+
+- name: Enable and start the Jenkins service
+  ansible.builtin.systemd:
+    name: jenkins
+    enabled: true
+    state: started

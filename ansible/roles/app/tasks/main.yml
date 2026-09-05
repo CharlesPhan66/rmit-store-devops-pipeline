@@ -1,0 +1,33 @@
+---
+- name: Ensure the repo is checked out
+  ansible.builtin.git:
+    repo: "{{ repo_url }}"
+    dest: "{{ repo_dir }}"
+    update: false
+    accept_hostkey: true
+  become_user: ec2-user
+  register: repo_clone
+
+- name: Read configuration from SSM Parameter Store
+  ansible.builtin.set_fact:
+    secret_key: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/SECRET_KEY', decrypt=true) }}"
+    database_url: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/DATABASE_URL', decrypt=true) }}"
+    postgres_password: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/POSTGRES_PASSWORD', decrypt=true) }}"
+  no_log: true
+
+- name: Render compose.env beside docker-compose.prod.yml
+  ansible.builtin.template:
+    src: compose.env.j2
+    dest: "{{ repo_dir }}/compose.env"
+    owner: ec2-user
+    group: ec2-user
+    mode: '0600'
+  no_log: true
+
+- name: Render deploy.sh outside the checkout
+  ansible.builtin.template:
+    src: deploy.sh.j2
+    dest: /home/ec2-user/deploy.sh
+    owner: ec2-user
+    group: ec2-user
+    mode: '0755'

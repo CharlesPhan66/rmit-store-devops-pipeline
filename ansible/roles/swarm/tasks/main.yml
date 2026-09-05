@@ -1,0 +1,30 @@
+---
+- name: Initialize swarm on the first manager node
+  ansible.builtin.command: >
+    docker swarm init --advertise-addr {{ ansible_default_ipv4.address }}
+  register: swarm_init
+  changed_when: "'Swarm initialized' in swarm_init.stdout"
+  failed_when:
+    - swarm_init.rc != 0
+    - "'already part of a swarm' not in swarm_init.stderr"
+  when: "'tag_Role_swarm_manager' in group_names"
+
+- name: Read the worker join token from the manager
+  ansible.builtin.command: docker swarm join-token -q worker
+  register: join_token
+  changed_when: false
+  delegate_to: "{{ groups['tag_Role_swarm_manager'][0] }}"
+  run_once: true
+  no_log: true
+
+- name: Join the workers
+ansible.builtin.command: >
+    docker swarm join --token {{ join_token.stdout }} 
+    {{ hostvars[groups['tag_Role_swarm_manager'][0]].ansible_host }}:2377
+  register: swarm_join
+  changed_when: "'This node joined a swarm' in swarm_join.stdout"
+  failed_when:
+    - swarm_join.rc != 0
+    - "'already part of a swarm' not in swarm_join.stderr"
+  when: "'tag_Role_swarm_worker' in group_names"
+  no_log: true
