@@ -1,5 +1,4 @@
 # Build context = repo root. Everything below never belongs in an image.
-#
 # Without this file the context includes .venv/ (hundreds of MB) and
 # node_modules/, and every build crawls — on a t3.micro it can time out.
 
