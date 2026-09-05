@@ -1,0 +1,103 @@
+name: rmit-store-prod
+
+services:
+
+  # --- Database --------------------------------------------------------------
+  # To use RDS instead: delete this whole service, delete the depends_on block
+  # in migrate, and point DATABASE_URL in compose.env at the RDS endpoint.
+  # However, the RDS instance must be running long before this stack starts, so there is nothing to wait for.
+  # But for testing purposes, let say you want to compose up quickly to see if the stack works, you can use a db container here. Just remember to delete it before you deploy to AWS.
+  # Ideally for staging, db container should be removed and use RDS instead. The db container is only for testing purposes.
+  # However, you should figure out a way to set RDS up as a service in the compose file,
+  # so that you can compose up and down the whole stack including RDS, no need to manually set up RDS
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rmit
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: rmit_store
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rmit -d rmit_store"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # --- Registry ---------------------------------------------------------------
+  # All three application services below pull from Amazon ECR. The registry host
+  # is <account-id>.dkr.ecr.<region>.amazonaws.com, and ${IMAGE_TAG} is exported
+  # by deploy.sh (see deploy.sh.example) from the commit Jenkins is deploying.
+  #
+  # Switching registries means editing all THREE image: lines, never just one.
+  # `migrate` and `api` must always be the same image: migrate runs that
+  # backend's own manage.py, so a mismatch migrates with one release's schema and
+  # then serves another release's code.
+  #
+  # To go back to Docker Hub:
+  #   image: <dockerhub-user>/rmit-api:${IMAGE_TAG:-latest}
+  # A public Docker Hub repo needs no login to pull. ECR always does - see the
+  # commented block in deploy.example.sh, and note the token expires after 12h.
+  #
+  # ${IMAGE_TAG:-latest} keeps a hand-typed `docker compose up` working when the
+  # variable is unset, which is useful while debugging.
+
+  # --- Migrations ------------------------------------------------------------
+  # Same image as api - same build, only the command differs.
+  migrate:
+    image: 003852212645.dkr.ecr.us-east-1.amazonaws.com/rmit-api:${IMAGE_TAG:-latest}
+    command: python manage.py migrate --noinput
+    # Because S3 is used, instead of having environment:, we use env_file: to load the environment variables from compose.env, which is not committed to git. This is to avoid exposing sensitive information like AWS keys and RDS password in the source code.
+    env_file:
+      - ./compose.env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  # --- API -------------------------------------------------------------------
+  api:
+    # Built by the `docker build --target runtime` command in the header.
+    # `--target runtime` is compulsory: stage `test` sits at the end of
+    # api.Dockerfile, and Docker uses the LAST stage when no target is given.
+    image: 003852212645.dkr.ecr.us-east-1.amazonaws.com/rmit-api:${IMAGE_TAG:-latest}
+    # env_file instead of environment: to load the environment variables from compose.env, which is not committed to git. This is to avoid exposing sensitive information like AWS keys and RDS password in the source code.
+    env_file:
+      - ./compose.env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # /readyz/ checks the database AND the storage backend, so with USE_S3=true
+    # this also proves the container can reach the bucket. If it stays 503 while
+    # `aws s3 ls` works on the host, read the IMDS hop limit section of the plan.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # --- Frontend --------------------------------------------------------------
+  client:
+    image: 003852212645.dkr.ecr.us-east-1.amazonaws.com/rmit-client:${IMAGE_TAG:-latest}
+    environment:
+      API_BASE_URL: /api
+    volumes:
+      # Same file as the dev stack. Its /media/ block simply never receives a
+      # request here: with USE_S3=true the browser fetches images straight from
+      # the bucket, so those URLs never come back to nginx at all.
+      - ./docker/client-nginx-compose.conf:/etc/nginx/conf.d/default.conf:ro
+    # Different port from the dev stack, so they can run side by side on one host.
+    ports:
+      - "8081:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+
+# No media volume anywhere in this file, and that is the point. Uploaded images
+# live in S3, so every replica reads the same bucket and `--scale api=2` shows
+# no broken images at all. That is the fix the dev stack demonstrates the need
+# for.
