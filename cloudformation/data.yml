@@ -175,10 +175,13 @@ Resources:
       Type: String
       Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com"
 
+  # Under prod/, not at the root: staging runs the db container in
+  # docker-compose.prod.yml and never opens a connection to RDS, so this
+  # address belongs to exactly one environment.
   RdsEndpointParam:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: /rmit/RDS_ENDPOINT
+      Name: /rmit/prod/RDS_ENDPOINT
       Type: String
       Value: !GetAtt Database.Endpoint.Address
 
