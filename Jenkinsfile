@@ -3,23 +3,25 @@
 pipeline {
     agent any
 
-    environment {
-        // Uncomment and fill in the following if you want to push to Docker Hub instead of ECR. The three image: lines in docker-compose.prod.yml and the login block in deploy.sh must match it.
-        // DOCKER_NS = ''
-        AWS_REGION = 'us-east-1'
-        ECR = '222431607375.dkr.ecr.us-east-1.amazonaws.com'
-        STAGING = 'ec2-user@172.31.90.253'
-        STAGING_URL = 'http://172.31.90.253:8081'
-        SWARM_MGR = 'ec2-user@172.31.23.29'
-        PROD_URL = 'http://rmit-alb-1002033451.us-east-1.elb.amazonaws.com'
-    }
-
     options {
         buildDiscarder(logRotator(numToKeepStr: '20'))
         disableConcurrentBuilds()
     }
 
     stages {
+        stage('Resolve environment') {
+            steps {
+                def ssm = { name ->
+                    sh(script: "aws ssm get-parameter --name ${name} --query Parameter.Value --output text", returnStdout: true).trim()
+                }
+                env.ECR = ssm('/rmit/ECR_REGISTRY')
+                env.STAGING     = "ec2-user@" + ssm('/rmit/staging/PRIVATE_IP')
+                env.STAGING_URL = "http://" + ssm('/rmit/staging/PRIVATE_IP') + ":8081"
+                env.SWARM_MGR   = "ec2-user@" + ssm('/rmit/prod/SWARM_MGR_IP')
+                env.PROD_URL    = "http://" + ssm('/rmit/prod/ALB_DNS')
+                echo "staging=${env.STAGING_URL} prod=${env.PROD_URL}"
+            }
+        }
         stage('Checkout') {
             steps {
                 checkout scm
