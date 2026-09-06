@@ -64,6 +64,7 @@ ansible-playbook -i ansible/inventory/dev.ini \
 | `runtime.yml` | Install Git, Python, pip and PostgreSQL client |
 | `nginx.yml` | Install Nginx and its Django proxy configuration |
 | `site.yml` | Apply Docker, runtime and Nginx together |
+| `verify.yml` | Verify services, runtimes, Nginx and HTTP |
 
 Run the combined configuration with `<PLAYBOOK>` set to `site`. The Nginx root
 page is a standalone rehearsal check. API proxy routes may return `502` until G2
@@ -82,8 +83,8 @@ unreachable=0
 failed=0
 ```
 
-The first run installs missing configuration. The second run changes nothing
-because the target already matches the declared state.
+The first run installs missing configuration; the second changes nothing because
+the target already matches the declared state.
 
 ## Prepare a production-like Swarm
 
@@ -146,5 +147,4 @@ Swarm services -> health checks -> rolling update -> rollback
 
 ## Security
 
-Never commit real inventories, PEM keys, passwords, AWS credentials, database
-URLs or Swarm tokens. Use approved AWS secret storage or Jenkins credentials.
+Never commit real inventories, PEM keys, passwords, AWS credentials, database URLs or Swarm tokens. Use approved AWS secret storage or Jenkins credentials.
