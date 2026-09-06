@@ -7,19 +7,6 @@
 
 ssm_prefix: /rmit/staging
 
-# One RDS instance, two databases. Production keeps rmit_store, which is the
-# only one CloudFormation can create; staging gets its own so a seed_demo
-# --flush here cannot empty production. The app role creates it on first run.
-# db_bootstrap_db is just somewhere to connect while asking whether staging_db
-# exists — you cannot connect to a database in order to create it.
-staging_db: rmit_staging
-db_master_user: rmit
-db_bootstrap_db: rmit_store
-
-# Written to SSM by cloudformation/data.yml. Shared by both environments, so
-# it sits at the root of the namespace rather than under ssm_prefix.
-rds_endpoint: "{{ lookup('amazon.aws.aws_ssm', '/rmit/RDS_ENDPOINT') }}"
-
 repo_url: git@github.com:rmit-vietnam-computing-technologies/2026b-cosc2767-a2-sg-team-13.git
 
 # "…/repo-name.git" -> "/home/ec2-user/repo-name"

@@ -132,12 +132,10 @@ Resources:
     DeletionPolicy: Snapshot
     Properties:
       DBInstanceIdentifier: rmit-store
-      # RDS creates exactly ONE database at provisioning time, and this is it.
-      # Staging runs on a second database, rmit_staging, on this same instance:
-      # sharing one would let a staging seed_demo --flush empty production.
-      # That second database is created by the Ansible app role, because
-      # CREATE DATABASE has to run from inside the VPC and CloudFormation has
-      # no way to reach a private subnet.
+      # This instance serves PRODUCTION only. Staging brings up its own throwaway
+      # Postgres container - the db service in docker-compose.prod.yml - so it
+      # never touches this data, and a seed_demo --flush on staging cannot reach
+      # production. That is also why only prod needs a DATABASE_URL pointing here.
       DBName: rmit_store
       Engine: postgres
       EngineVersion: "16"
