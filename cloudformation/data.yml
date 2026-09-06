@@ -1,0 +1,187 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: RMIT Store durable resources (RDS, S3, ECR)
+
+# Below is 3 parameters we need to pass in when creating the stack.
+# The VPC ID is needed for the RDS security group
+# The DB password is needed for the RDS instance
+# And the S3 bucket name is needed for the S3 bucket.
+# May pass using the AWS CLI like this:
+# aws cloudformation deploy \
+#   --parameter-overrides DbPassword='your-password'
+# Example to use this file:
+# aws cloudformation deploy \
+#   --template-file cloudformation/data.yml \
+#   --stack-name rmit-data \
+#   --parameter-overrides \
+#     NetworkStackName='rmit-network' \
+#     DbPassword='your-password' \
+#     MediaBucketName='rmit-store-media'
+
+# If the network stack is named differently, you can pass in the name of the network stack when creating this stack
+# Otherwise, it will fallback to the default name rmit-network, and the stack will fail to create because it can't find the resources it needs from the network stack.
+Parameters:
+  NetworkStackName:
+    Type: String
+    Default: rmit-network
+    Description: >
+      Name of the network stack. Every security group and subnet is imported
+      from it, so this template owns no network policy of its own.
+  DbPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+  MediaBucketName:
+    Type: String
+
+Resources:
+
+  # S3
+  # The Bucket name will be set to the value of the MediaBucketName parameter passed in when creating the stack
+  MediaBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Ref MediaBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  # Policy to allow public read and write access to the S3 bucket
+  MediaBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref MediaBucket
+      PolicyDocument:
+        Statement:
+          - Sid: PublicReadMediaBucket
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "arn::aws:s3:::${MediaBucket}/media/*"
+
+  # ECR
+  # just like the repo rmit-api that has been created manually
+  ApiRepo:
+    Type: AWS::ECR::Repository
+    DeletePolicy: Retain
+    Properties:
+      RepositoryName: rmit-api
+      ImageTagMutability: MUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only the last 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
+  # Same as rmit-client repo that has been created manually, but we will create it here so that it can be deleted when the stack is deleted
+  ClientRepo:
+    Type: AWS::ECR::Repository
+    DeletePolicy: Retain
+    Properties:
+      RepositoryName: rmit-client
+      ImageTagMutability: MUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only the last 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
+  # RDS
+  # We import the sg and the private subnets from the network stack, so we don't have to create them here
+  # This is because the RDS instance needs to be in a private subnet, which has no route to the internet, so we can skip a NAT gateway.
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: RMIT Store database subnets
+      SubnetIds:
+        - !ImportValue
+            Fn::Sub: "${NetworkStackName}-PrivateSubnet1"
+        - !ImportValue
+            Fn::Sub: "${NetworkStackName}-PrivateSubnet2"
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: rmit-store
+      DBName: rmit_store
+      Engine: postgres
+      EngineVersion: "16"
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: 20
+      MasterUsername: admin
+      MasterUserPassword: !Ref DbPassword
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups:
+        - !ImportValue
+            Fn::Sub: "${NetworkStackName}-DbSg"
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 0
+
+  # SSM
+  # Ansible and Jenkins read from this
+  # Save needed values to SSM to fetch later, for example to use the bucket name, the ECR registry, and the RDS endpoint in the Ansible playbook
+  MediaBucketParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /rmit/staging/MEDIA_BUCKET
+      Type: String
+      Value: !Ref MediaBucket
+
+  MediaBucketParamProd:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /rmit/prod/MEDIA_BUCKET
+      Type: String
+      Value: !Ref MediaBucket
+
+  EcrRegistryParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /rmit/staging/ECR_REGISTRY
+      Type: String
+      Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com"
+
+  RdsEndpointParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /rmit/staging/RDS_ENDPOINT
+      Type: String
+      Value: !GetAtt Database.Endpoint.Address
+
+# We just return the RDS endpoint and the S3 bucket name to confirm that the stack has been created successfully, and to use them in the next step of the deployment.
+# Other values will be stored in SSM, so that the Ansible playbooks can read them from there.
+# Without SSM, the Ansible playbooks would have to be passed these values as parameters or we have to ssh and edit them manually, which is not secure and not scalable.
+Outputs:
+  RdsEndpoint:
+    Value: !GetAtt Database.Endpoint.Address
+  MediaBucket:
+    Value: !Ref MediaBucket

@@ -1,7 +1,6 @@
 ---
 # Variables for the staging host. The group name comes from the EC2 tag
 # Role=staging, so renaming the machine itself changes nothing here.
-#
 # Only repo_url is typed by hand. Everything else is derived from the inventory
 # or read from SSM, so this file survives the infrastructure being rebuilt with
 # different addresses.
