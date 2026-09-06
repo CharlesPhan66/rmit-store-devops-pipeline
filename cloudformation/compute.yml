@@ -96,9 +96,10 @@ Resources:
   StagingServer:
     Type: AWS::EC2::Instance
     Properties:
-      # Runs containers, builds nothing. gunicorn workers are forks and share
-      # most of their memory, so the Compose stack fits comfortably.
-      InstanceType: t3.micro
+      # Runs the whole Compose stack: gunicorn, nginx and a migrate job. It fits
+      # on a micro, but there is no swap and no headroom, so a small buys the
+      # margin cheaply.
+      InstanceType: t3.small
       ImageId: !Ref LatestAmiId
       KeyName: !Ref KeyPairName
       IamInstanceProfile: LabInstanceProfile
@@ -170,8 +171,10 @@ Resources:
   SwarmWorker1:
     Type: AWS::EC2::Instance
     Properties:
-      # Workers only run tasks. If one dies, Swarm reschedules its share.
-      InstanceType: t3.micro
+      # Sized for the peak, not the average. `order: start-first` means the node
+      # being updated briefly runs the OLD and NEW api task at once, so its
+      # memory roughly doubles for a minute during every deploy.
+      InstanceType: t3.small
       ImageId: !Ref LatestAmiId
       KeyName: !Ref KeyPairName
       IamInstanceProfile: LabInstanceProfile
@@ -205,8 +208,9 @@ Resources:
   SwarmWorker2:
     Type: AWS::EC2::Instance
     Properties:
-      # Workers only run tasks. If one dies, Swarm reschedules its share.
-      InstanceType: t3.micro
+      # Same as worker 1: with parallelism 1, any node can be the one holding two
+      # api tasks during a rolling update.
+      InstanceType: t3.small
       ImageId: !Ref LatestAmiId
       KeyName: !Ref KeyPairName
       IamInstanceProfile: LabInstanceProfile
