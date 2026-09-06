@@ -118,3 +118,4 @@ CLAUDE.MD
 # Planning notes (working documents, not deliverables)
 plan/
 ansible/inventory/dev.ini
+ansible/inventory/swarm.ini

@@ -1,0 +1,22 @@
+---
+version: "3.8"
+
+services:
+  web:
+    image: nginx:1.27-alpine
+    ports:
+      - target: 80
+        published: 8080
+        protocol: tcp
+        mode: ingress
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 5s
+        order: start-first
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: on-failure

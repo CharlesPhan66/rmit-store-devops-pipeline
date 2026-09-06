@@ -1,0 +1,7 @@
+---
+- name: Configure Nginx on G3 targets
+  hosts: g3_targets
+  become: true
+
+  roles:
+    - nginx

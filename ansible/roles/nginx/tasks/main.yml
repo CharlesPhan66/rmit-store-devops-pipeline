@@ -1,0 +1,54 @@
+---
+- name: Install Nginx
+  ansible.builtin.dnf:
+    name: "{{ nginx_package_name }}"
+    state: present
+    update_cache: true
+
+- name: Ensure the Nginx document root exists
+  ansible.builtin.file:
+    path: "{{ nginx_document_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the rehearsal landing page
+  ansible.builtin.template:
+    src: index.html.j2
+    dest: "{{ nginx_index_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload Nginx
+
+- name: Install the Django reverse-proxy configuration
+  ansible.builtin.template:
+    src: rmit-store.conf.j2
+    dest: "{{ nginx_proxy_config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload Nginx
+
+- name: Validate the Nginx configuration
+  ansible.builtin.command: /usr/sbin/nginx -t
+  changed_when: false
+
+- name: Start and enable Nginx
+  ansible.builtin.service:
+    name: "{{ nginx_service_name }}"
+    state: started
+    enabled: true
+
+- name: Apply pending Nginx configuration changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify the local Nginx landing page
+  ansible.builtin.uri:
+    url: http://127.0.0.1/
+    status_code: 200
+    return_content: true
+  register: nginx_local_response
+  failed_when: nginx_rehearsal_title not in nginx_local_response.content
+  when: nginx_verify_local | bool

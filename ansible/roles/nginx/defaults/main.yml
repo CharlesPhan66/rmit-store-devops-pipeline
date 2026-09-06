@@ -1,0 +1,14 @@
+---
+nginx_package_name: nginx
+nginx_service_name: nginx
+nginx_document_root: /usr/share/nginx/html
+nginx_index_path: "{{ nginx_document_root }}/index.html"
+nginx_proxy_config_path: /etc/nginx/default.d/rmit-store.conf
+
+# The personal rehearsal expects the future Django/Gunicorn API on this address.
+# Production can override these values without changing the role.
+nginx_upstream_host: 127.0.0.1
+nginx_upstream_port: 8000
+
+nginx_rehearsal_title: G3 Ansible Nginx rehearsal
+nginx_verify_local: true

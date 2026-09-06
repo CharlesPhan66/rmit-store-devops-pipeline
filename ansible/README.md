@@ -2,95 +2,79 @@
 
 ## Purpose
 
-This directory contains the Ansible configuration for the G3 deployment work.
+This directory contains G3 configuration-management and orchestration work.
+Ansible connects to EC2 over SSH and makes every target match the configuration
+stored in this repository.
 
-Ansible uses SSH to connect to the EC2 instances defined in the inventory and
-allows the team to manage their configuration from one control machine.
+## Status
 
-## Current status
+Completed on a personal Amazon Linux 2023 EC2 instance:
+- Safe inventory example and connectivity preflight.
+- Reusable roles for Docker, application runtime and Nginx.
+- Docker and runtime idempotency: the second run reported `changed=0`.
+- Single-node Swarm rehearsal with a public Nginx image.
 
-Completed:
+Prepared but not production-tested:
+- Manager/worker inventory and idempotent Swarm join workflow.
+- Two-replica rehearsal stack with rolling-update and rollback policies.
+- Nginx reverse proxy for Django on port `8000`.
 
-- Ansible structure, safe inventory and EC2 preflight playbook.
-- Reusable Docker and application-runtime roles with configurable variables.
-- Personal Amazon Linux 2023 testing with `changed=0` on second runs.
-- Single-node Docker Swarm rehearsal using a public Nginx image.
-
-Pending production integration:
-
-- Use G1 outputs to configure the production manager and workers.
-- Deploy G2 images using the agreed runtime contract.
-- Configure Nginx/Gunicorn, migrations, RDS and S3 as required.
-- Demonstrate health checks, rolling update, rollback and evidence.
-
-> The single-node Swarm test is a rehearsal, not the production deployment.
+Production integration still needs the G1 infrastructure and G2 images/runtime
+contract. The personal single-node rehearsal is not production evidence.
 
 ## Requirements
 
 - Python 3 and Ansible Core on the control machine.
-- SSH access and the correct private key for each target EC2 instance.
-- Amazon Linux 2023 target instances.
-- Security-group rules that allow SSH from the control machine.
-
-Activate the Ansible virtual environment when required:
+- Amazon Linux 2023 targets, the SSH key and SSH access from the controller.
+- Private network access between production Swarm nodes.
 
 ```bash
 source <PATH_TO_ANSIBLE_VENV>/bin/activate
 ansible --version
 ```
 
-## Development inventory
+## Personal development inventory
 
 ```bash
 cp ansible/inventory/dev.example.ini ansible/inventory/dev.ini
 ```
 
-Set the target address in `ansible/inventory/dev.ini`:
+Replace the documentation address in `dev.ini` with the EC2 public IP or DNS.
+The real `dev.ini` is ignored by Git.
 
 ```ini
 [g3_targets]
-g3_target ansible_host=<EC2_PUBLIC_IP_OR_DNS> ansible_user=ec2-user ansible_python_interpreter=/usr/bin/python3
+g3_target ansible_host=<EC2_ADDRESS> ansible_user=ec2-user ansible_python_interpreter=/usr/bin/python3
 ```
 
-Never commit `dev.ini`, PEM keys, passwords, AWS credentials or Swarm tokens.
+## Run Requirement 7 baseline
 
-## Run the baseline configuration
-
-Run the connectivity check:
+Use the same command pattern for every playbook:
 
 ```bash
 ansible-playbook -i ansible/inventory/dev.ini \
-  ansible/playbooks/preflight.yml \
+  ansible/playbooks/<PLAYBOOK>.yml \
   --private-key <PATH_TO_PEM_KEY>
 ```
 
-Expected recap: `unreachable=0` and `failed=0`.
+| Playbook | Purpose |
+| --- | --- |
+| `preflight.yml` | Test SSH and display target facts |
+| `docker.yml` | Install, start and enable Docker |
+| `runtime.yml` | Install Git, Python, pip and PostgreSQL client |
+| `nginx.yml` | Install Nginx and its Django proxy configuration |
+| `site.yml` | Apply Docker, runtime and Nginx together |
 
-The preflight result confirms that Ansible connected to the target EC2 instance
-successfully and that no tasks failed.
+Run the combined configuration with `<PLAYBOOK>` set to `site`. The Nginx root
+page is a standalone rehearsal check. API proxy routes may return `502` until G2
+provides the Django service on port `8000`.
 
-Install and configure Docker:
-
-```bash
-ansible-playbook -i ansible/inventory/dev.ini \
-  ansible/playbooks/docker.yml \
-  --private-key <PATH_TO_PEM_KEY>
-```
-
-Install the application runtime and PostgreSQL client:
-
-```bash
-ansible-playbook -i ansible/inventory/dev.ini \
-  ansible/playbooks/runtime.yml \
-  --private-key <PATH_TO_PEM_KEY>
-```
-
-The PostgreSQL server created on the personal EC2 instance was only for practice.
-Production must use the RDS database supplied by G1.
+The proxy preserves the original host with `proxy_set_header Host $host`, which
+prevents Django from generating URLs for the wrong host.
 
 ## Idempotency
 
-Run both configuration playbooks a second time. The expected recap is:
+Run `site.yml` twice against the same target. The second recap should contain:
 
 ```text
 changed=0
@@ -98,49 +82,69 @@ unreachable=0
 failed=0
 ```
 
-The first playbook run changes the EC2 instance by installing and applying the
-required configuration. The second run makes no changes because the instance
-already matches the desired state, which keeps the EC2 configuration consistent.
+The first run installs missing configuration. The second run changes nothing
+because the target already matches the declared state.
 
-## Docker Swarm rehearsal
+## Prepare a production-like Swarm
 
-The personal EC2 rehearsal initialized one Swarm manager, published Nginx on port
-`8080`, and scaled the service between two and three replicas.
+```bash
+cp ansible/inventory/swarm.example.ini ansible/inventory/swarm.ini
+```
 
-A replica is one running instance of a service. Replicas running on the same EC2
-instance are not highly available because they all stop if that instance fails.
+Replace all example public addresses with G1 outputs. Ansible automatically uses
+each manager's private default address as its Swarm advertise address.
+
+Required security-group traffic between Swarm nodes:
+
+- TCP `2377` for cluster management.
+- TCP/UDP `7946` for node communication.
+- UDP `4789` for overlay networking.
+
+Check the inventory and create the cluster:
+
+```bash
+ansible-inventory -i ansible/inventory/swarm.ini --graph
+ansible-playbook -i ansible/inventory/swarm.ini \
+  ansible/playbooks/swarm.yml --syntax-check
+ansible-playbook -i ansible/inventory/swarm.ini \
+  ansible/playbooks/swarm.yml --private-key <PATH_TO_PEM_KEY>
+```
+
+The manager creates the worker token at runtime. Ansible masks it with `no_log`
+and never writes it into Git. The optional public-image rehearsal runs two Nginx
+replicas on port `8080`:
+
+```bash
+ansible-playbook -i ansible/inventory/swarm.ini \
+  ansible/playbooks/swarm_rehearsal.yml \
+  --private-key <PATH_TO_PEM_KEY>
+```
 
 ## Production inputs
 
-G1 must provide manager and worker addresses, SSH access, security-group rules,
-RDS details, the S3 bucket and region, IAM details, ECR names and ALB health data.
+G1 must provide manager/worker addresses, SSH access, security-group rules, RDS
+endpoint, S3 bucket/region, IAM access, ECR names and load-balancer health data.
 
-G2 must provide immutable API and client image tags, container ports, health
-endpoints, required environment variables, migration commands and entrypoints.
+G2 must provide immutable API/client image tags, ports, health endpoints,
+environment-variable names, entrypoints and the one-shot migration command.
 
 ```text
 G1 infrastructure -> Ansible inventory -> Docker/Swarm configuration
-G2 images and runtime contract -> migrations -> Swarm stack deployment
-Swarm services -> health checks -> rolling update or rollback
+G2 images + runtime contract -> migration -> application stack deployment
+Swarm services -> health checks -> rolling update -> rollback
 ```
-
-G1 provides infrastructure such as the EC2 instances and supporting AWS
-resources. G2 provides the container images and runtime contract. G3 uses these
-outputs with Ansible to configure the EC2 instances, create the Docker Swarm and
-deploy the application services to its worker nodes.
 
 ## Evidence checklist
 
-- [ ] Preflight succeeds on production targets.
-- [ ] Docker and runtime playbooks succeed.
-- [ ] Second playbook runs show `changed=0`.
-- [ ] Manager and worker nodes appear in the Swarm.
-- [ ] The API runs with at least two replicas.
-- [ ] Migration and application health checks succeed.
-- [ ] RDS and S3 integration is demonstrated.
-- [ ] Rolling update and rollback are demonstrated.
+- [ ] Production preflight has `unreachable=0` and `failed=0`.
+- [ ] Second configuration run has `changed=0`.
+- [ ] One manager and all workers are `Ready`.
+- [ ] API runs with at least two replicas.
+- [ ] One-shot migration and application health checks succeed.
+- [ ] Both replicas serve the same product image with `USE_S3=True`.
+- [ ] A rolling update and rollback are demonstrated.
 
 ## Security
 
-Use private network addresses between Swarm nodes where possible. Store secrets
-in the approved AWS secret service or Jenkins credentials, never in Git.
+Never commit real inventories, PEM keys, passwords, AWS credentials, database
+URLs or Swarm tokens. Use approved AWS secret storage or Jenkins credentials.
