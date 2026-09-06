@@ -15,6 +15,57 @@
     postgres_password: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/POSTGRES_PASSWORD', decrypt=true) }}"
   no_log: true
 
+  # RDS creates only the database named in the stack's DBName. Staging runs on
+  # a second one so a seed_demo --flush here cannot empty production, and this
+  # role is the only thing that runs inside the VPC on every rebuild - which is
+  # what CREATE DATABASE needs, since RDS sits in a private subnet.
+  #
+  # argv: rather than a shell string, so the password reaches execve directly
+  # and is never parsed by /bin/sh. postgres:16-alpine is used as a throwaway
+  # psql client, which keeps the host free of a postgresql package.
+- name: Check whether the staging database exists
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - -e
+      - "PGPASSWORD={{ postgres_password }}"
+      - postgres:16-alpine
+      - psql
+      - -h
+      - "{{ rds_endpoint }}"
+      - -U
+      - "{{ db_master_user }}"
+      - -d
+      - "{{ db_bootstrap_db }}"
+      - -tAc
+      - "SELECT 1 FROM pg_database WHERE datname='{{ staging_db }}'"
+  register: staging_db_exists
+  changed_when: false
+  no_log: true
+
+- name: Create the staging database
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - -e
+      - "PGPASSWORD={{ postgres_password }}"
+      - postgres:16-alpine
+      - psql
+      - -h
+      - "{{ rds_endpoint }}"
+      - -U
+      - "{{ db_master_user }}"
+      - -d
+      - "{{ db_bootstrap_db }}"
+      - -c
+      - "CREATE DATABASE {{ staging_db }} OWNER {{ db_master_user }}"
+  when: staging_db_exists.stdout != "1"
+  no_log: true
+
 - name: Render compose.env beside docker-compose.prod.yml
   ansible.builtin.template:
     src: compose.env.j2

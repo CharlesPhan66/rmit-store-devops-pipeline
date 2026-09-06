@@ -59,13 +59,13 @@ Resources:
             Effect: Allow
             Principal: "*"
             Action: s3:GetObject
-            Resource: !Sub "arn::aws:s3:::${MediaBucket}/media/*"
+            Resource: !Sub "arn:aws:s3:::${MediaBucket}/media/*"
 
   # ECR
   # just like the repo rmit-api that has been created manually
   ApiRepo:
     Type: AWS::ECR::Repository
-    DeletePolicy: Retain
+    DeletionPolicy: Retain
     Properties:
       RepositoryName: rmit-api
       ImageTagMutability: MUTABLE
@@ -91,7 +91,7 @@ Resources:
   # Same as rmit-client repo that has been created manually, but we will create it here so that it can be deleted when the stack is deleted
   ClientRepo:
     Type: AWS::ECR::Repository
-    DeletePolicy: Retain
+    DeletionPolicy: Retain
     Properties:
       RepositoryName: rmit-client
       ImageTagMutability: MUTABLE
@@ -132,12 +132,18 @@ Resources:
     DeletionPolicy: Snapshot
     Properties:
       DBInstanceIdentifier: rmit-store
+      # RDS creates exactly ONE database at provisioning time, and this is it.
+      # Staging runs on a second database, rmit_staging, on this same instance:
+      # sharing one would let a staging seed_demo --flush empty production.
+      # That second database is created by the Ansible app role, because
+      # CREATE DATABASE has to run from inside the VPC and CloudFormation has
+      # no way to reach a private subnet.
       DBName: rmit_store
       Engine: postgres
       EngineVersion: "16"
       DBInstanceClass: db.t3.micro
       AllocatedStorage: 20
-      MasterUsername: admin
+      MasterUsername: rmit
       MasterUserPassword: !Ref DbPassword
       DBSubnetGroupName: !Ref DbSubnetGroup
       VPCSecurityGroups:
@@ -149,31 +155,32 @@ Resources:
   # SSM
   # Ansible and Jenkins read from this
   # Save needed values to SSM to fetch later, for example to use the bucket name, the ECR registry, and the RDS endpoint in the Ansible playbook
+  #
+  # Naming rule, so Ansible and Jenkins know where to look without guessing:
+  #   /rmit/<NAME>                 shared by every environment - one bucket,
+  #                                one registry, one RDS instance
+  #   /rmit/<env>/<NAME>           differs per environment - SECRET_KEY,
+  #                                DATABASE_URL, POSTGRES_PASSWORD
+  # The per-environment secrets are NOT created here: they are SecureString,
+  # which CloudFormation cannot create. They are put in by CLI once (part 5.9).
   MediaBucketParam:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: /rmit/staging/MEDIA_BUCKET
-      Type: String
-      Value: !Ref MediaBucket
-
-  MediaBucketParamProd:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: /rmit/prod/MEDIA_BUCKET
+      Name: /rmit/MEDIA_BUCKET
       Type: String
       Value: !Ref MediaBucket
 
   EcrRegistryParam:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: /rmit/staging/ECR_REGISTRY
+      Name: /rmit/ECR_REGISTRY
       Type: String
       Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com"
 
   RdsEndpointParam:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: /rmit/staging/RDS_ENDPOINT
+      Name: /rmit/RDS_ENDPOINT
       Type: String
       Value: !GetAtt Database.Endpoint.Address
 
