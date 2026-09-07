@@ -1,21 +1,30 @@
 pipeline {
     agent any
 
-    environment {
-        AWS_REGION  = 'us-east-1'
-        ECR         = '222431607375.dkr.ecr.us-east-1.amazonaws.com'
-        STAGING     = 'ec2-user@172.31.90.253'
-        STAGING_URL = 'http://172.31.90.253:8081'
-        SWARM_MGR   = 'ec2-user@172.31.23.29'
-        PROD_URL    = 'http://rmit-alb-1002033451.us-east-1.elb.amazonaws.com'
-    }
-
     options {
         buildDiscarder(logRotator(numToKeepStr: '20'))
         disableConcurrentBuilds()
     }
 
     stages {
+
+        stage('Resolve environment') {
+            steps {
+                script {
+                    env.CURRENT_STAGE = 'Resolve environment'
+                    def ssm = { name ->
+                        sh(script: "aws ssm get-parameter --name ${name} --query Parameter.Value --output text", returnStdout: true).trim()
+                    }
+                    env.AWS_REGION  = 'us-east-1'
+                    env.ECR         = ssm('/rmit/ECR_REGISTRY')
+                    env.STAGING     = "ec2-user@" + ssm('/rmit/staging/PRIVATE_IP')
+                    env.STAGING_URL = "http://" + ssm('/rmit/staging/PRIVATE_IP') + ":8081"
+                    env.SWARM_MGR   = "ec2-user@" + ssm('/rmit/prod/SWARM_MGR_IP')
+                    env.PROD_URL    = "http://" + ssm('/rmit/prod/ALB_DNS')
+                    echo "ecr=${env.ECR} staging=${env.STAGING_URL} prod=${env.PROD_URL}"
+                }
+            }
+        }
 
         stage('Checkout') {
             steps {
@@ -140,18 +149,19 @@ pipeline {
             }
         }
 
+
         stage('Push images') {
             steps {
                 script { env.CURRENT_STAGE = 'Push images' }
                 sh """
-                    aws ecr get-login-password --region ${AWS_REGION} \\
-                        | docker login --username AWS --password-stdin ${ECR}
+                    aws ecr get-login-password --region ${env.AWS_REGION} \\
+                        | docker login --username AWS --password-stdin ${env.ECR}
 
-                    docker tag rmit-api:${env.SHA} ${ECR}/rmit-api:${env.SHA}
-                    docker tag rmit-client:${env.SHA} ${ECR}/rmit-client:${env.SHA}
+                    docker tag rmit-api:${env.SHA} ${env.ECR}/rmit-api:${env.SHA}
+                    docker tag rmit-client:${env.SHA} ${env.ECR}/rmit-client:${env.SHA}
 
-                    docker push ${ECR}/rmit-api:${env.SHA}
-                    docker push ${ECR}/rmit-client:${env.SHA}
+                    docker push ${env.ECR}/rmit-api:${env.SHA}
+                    docker push ${env.ECR}/rmit-client:${env.SHA}
                 """
             }
         }
@@ -161,7 +171,7 @@ pipeline {
                 script { env.CURRENT_STAGE = 'Deploy staging' }
                 sshagent(['app-host-key']) {
                     sh """
-                        ssh -o StrictHostKeyChecking=no ${STAGING} \\
+                        ssh -o StrictHostKeyChecking=no ${env.STAGING} \\
                             'GIT_SHA=${env.SHA} ~/deploy.sh'
                     """
                 }
@@ -172,8 +182,8 @@ pipeline {
             steps {
                 script { env.CURRENT_STAGE = 'Smoke staging' }
                 sh """
-                    curl -sf ${STAGING_URL}/healthz/
-                    curl -sf ${STAGING_URL}/readyz/
+                    curl -sf ${env.STAGING_URL}/healthz/
+                    curl -sf ${env.STAGING_URL}/readyz/
                 """
             }
         }
@@ -186,9 +196,9 @@ pipeline {
                 script { env.CURRENT_STAGE = 'Promote to production' }
                 sshagent(['app-host-key']) {
                     sh """
-                        ssh -o StrictHostKeyChecking=no ${SWARM_MGR} '
+                        ssh -o StrictHostKeyChecking=no ${env.SWARM_MGR} '
                             cd ~/deploy &&
-                            ECR=${ECR} GIT_SHA=${env.SHA} docker stack deploy \\
+                            ECR=${env.ECR} GIT_SHA=${env.SHA} docker stack deploy \\
                                 -c swarm/stack.yml --with-registry-auth rmit
                         '
                     """
@@ -203,8 +213,8 @@ pipeline {
             steps {
                 script { env.CURRENT_STAGE = 'Smoke production' }
                 sh """
-                    curl -sf ${PROD_URL}/healthz/
-                    curl -sf ${PROD_URL}/readyz/
+                    curl -sf ${env.PROD_URL}/healthz/
+                    curl -sf ${env.PROD_URL}/readyz/
                 """
             }
         }
