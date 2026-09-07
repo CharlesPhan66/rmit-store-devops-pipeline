@@ -236,27 +236,21 @@ pipeline {
                     '
                 """
 
-                // `docker stack deploy` returns as soon as the orchestrator has
-                // ACCEPTED the spec, not when the tasks are running. Without this
-                // gate the smoke stage fires a quarter of a second later, reaches
-                // an nginx whose upstream has no task yet, and reports 502 on a
-                // deployment that was in fact perfectly fine.
-                //
-                // Poll the load balancer rather than `docker service ls`: a task
-                // being Running is not the same as the ALB having marked its
-                // target healthy and started sending traffic there. This waits
-                // for the thing the smoke test is about to measure.
                 sh """
-                    for i in \$(seq 1 60); do
-                        CODE=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 ${PROD_URL}/readyz/ || true)
-                        if [ "\$CODE" = "200" ]; then
-                            echo "Production is serving after \$((i * 5))s"
+                    HITS=0
+                    for i in \$(seq 1 80); do
+                        BODY=\$(curl -s --max-time 5 ${PROD_URL}/api/version/ || true)
+                        case "\$BODY" in
+                            *${env.SHA}*) HITS=\$((HITS + 1)) ;;
+                            *)            HITS=0 ;;
+                        esac
+                        if [ "\$HITS" -ge 10 ]; then
+                            echo "The last 10 responses all report ${env.SHA}"
                             exit 0
                         fi
-                        echo "waiting for the rollout, /readyz/ says \$CODE"
-                        sleep 5
+                        sleep 3
                     done
-                    echo "Production never became ready. Not running the smoke tests against it."
+                    echo "The load balancer never settled on ${env.SHA}. Last response: \$BODY"
                     exit 1
                 """
             }
