@@ -136,6 +136,9 @@ pipeline {
         // uploads the generated product images, which is the cheapest proof
         // that USE_S3 and the instance profile actually work.
         //
+        // create_admin has to go first. seed_demo refuses to invent an
+        // administrator password and has no environment fallback
+        //
         // Production deliberately has no equivalent: seeding demo data into
         // real customer records is exactly the accident this split prevents.
         // Still follow the structure after copying the files
@@ -151,6 +154,8 @@ pipeline {
                        && export ECR=${env.ECR} IMAGE_TAG=${env.SHA} \
                        && docker compose --env-file compose.env -f docker-compose.prod.yml pull \
                        && docker compose --env-file compose.env -f docker-compose.prod.yml up -d --remove-orphans \
+                       && docker compose --env-file compose.env -f docker-compose.prod.yml \
+                            run --rm --no-deps api python manage.py create_admin \
                        && docker compose --env-file compose.env -f docker-compose.prod.yml \
                             run --rm --no-deps api python manage.py seed_demo \
                        && docker image prune -f'

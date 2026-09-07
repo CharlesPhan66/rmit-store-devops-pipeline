@@ -17,6 +17,7 @@
     secret_key: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/SECRET_KEY', decrypt=true, region=aws_region) }}"
     database_url: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/DATABASE_URL', decrypt=true, region=aws_region) }}"
     postgres_password: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/POSTGRES_PASSWORD', decrypt=true, region=aws_region) }}"
+    admin_password: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/ADMIN_PASSWORD', decrypt=true, region=aws_region) }}"
   no_log: true
 
 - name: Render compose.env

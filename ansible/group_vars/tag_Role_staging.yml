@@ -12,6 +12,11 @@ ssm_prefix: /rmit/staging
 # holds no GitHub credential at all.
 deploy_dir: /home/ec2-user/deploy
 
+# seed_demo looks up its administrator by this address (its own default), so
+# create_admin has to make the account under exactly this email or seed_demo
+# will demand a password it has no way to receive.
+admin_email: admin@rmit.edu.au
+
 # Derived from the inventory, so no IP is ever written down. ansible_host is the
 # private IP the aws_ec2 plugin returned — the same address the Jenkins smoke
 # stage calls, which is exactly what ALLOWED_HOSTS has to contain.

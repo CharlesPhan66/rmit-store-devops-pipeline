@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Put the five SecureString parameters the pipeline needs into SSM.
+# Put the six SecureString parameters the pipeline needs into SSM.
 #
 #   ./scripts/put-secrets.sh
 #
 # CloudFormation cannot do this: AWS::SSM::Parameter accepts String and
-# StringList only, never SecureString. So these five live outside the
+# StringList only, never SecureString. So these six live outside the
 # templates, and this script is the whole of that manual step.
 #
 # Run it once, after the rmit-data stack exists. Re-running is safe: the two
@@ -100,6 +100,23 @@ aws ssm put-parameter --name /rmit/prod/DATABASE_URL \
   --type SecureString --overwrite \
   --value "postgres://${DB_USER}:${RDS_PASS}@${RDS}:5432/${DB_NAME}" >/dev/null
 
+# --- Staging's store administrator -------------------------------------------
+# `manage.py create_admin` reads this from the container environment, which
+# Ansible writes into compose.env. seed_demo has no environment fallback and
+# aborts on an empty database without it, so the staging deploy needs both.
+# Staging only: production is never seeded with demo data.
+
+if [ -z "${ADMIN_PASS:-}" ]; then
+  read -rsp 'Staging store admin password (for admin@rmit.edu.au): ' ADMIN_PASS
+  echo
+fi
+[ -n "$ADMIN_PASS" ] || die "The admin password must not be empty"
+
+echo "==> /rmit/staging/ADMIN_PASSWORD"
+aws ssm put-parameter --name /rmit/staging/ADMIN_PASSWORD \
+  --type SecureString --overwrite \
+  --value "$ADMIN_PASS" >/dev/null
+
 # --- SECRET_KEY, one per environment -----------------------------------------
 # Created, never overwritten. Rotating this signing key invalidates every
 # issued JWT and every outstanding password-reset link, so a careless re-run of
@@ -117,7 +134,7 @@ for ENV in staging prod; do
   fi
 done
 
-unset RDS_PASS STAGING_PASS
+unset RDS_PASS STAGING_PASS ADMIN_PASS
 
 # --- Verify ------------------------------------------------------------------
 
@@ -129,10 +146,10 @@ aws ssm get-parameters-by-path --path /rmit --recursive \
 COUNT=$(aws ssm get-parameters-by-path --path /rmit --recursive \
           --query 'length(Parameters)' --output text)
 
-# 9 String from CloudFormation + the 5 written here. JENKINS_PUBKEY makes 15,
+# 9 String from CloudFormation + the 6 written here. JENKINS_PUBKEY makes 16,
 # but Ansible has not run yet at this point in the runbook.
-if [ "$COUNT" -lt 14 ]; then
-  die "expected at least 14 parameters, found $COUNT. A CloudFormation stack is
+if [ "$COUNT" -lt 15 ]; then
+  die "expected at least 15 parameters, found $COUNT. A CloudFormation stack is
        probably missing - check that all four deployed."
 fi
 
