@@ -184,12 +184,6 @@ pipeline {
         }
 
         stage('Migrate prod') {
-            when {
-                anyOf {
-                    branch 'main'
-                    branch 'charles/self-work'
-                }
-            }
             steps {
                 sh """
                     ssh -o StrictHostKeyChecking=no ${SWARM_MGR} '
@@ -225,12 +219,6 @@ pipeline {
         }
 
         stage('Deploy prod (Swarm)') {
-            when {
-                anyOf {
-                    branch 'main'
-                    branch 'charles/self-work'
-                }
-            }
             steps {
                 sh """
                     ssh -o StrictHostKeyChecking=no ${SWARM_MGR} 'mkdir -p ~/deploy/swarm ~/deploy/docker'
@@ -250,12 +238,6 @@ pipeline {
         }
 
         stage('Smoke prod') {
-            when {
-                anyOf {
-                    branch 'main'
-                    branch 'charles/self-work'
-                }
-            }
             steps {
                 sh """
                     docker run --rm --network host \
