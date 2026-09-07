@@ -28,3 +28,37 @@
     - "'already part of a swarm' not in swarm_join.stderr"
   when: "'tag_Role_swarm_worker' in group_names"
   no_log: true
+
+# swarm/stack.yml declares SECRET_KEY and DATABASE_URL as external secrets
+- name: List the secrets the swarm already holds
+  ansible.builtin.command:
+    argv:
+      - docker
+      - secret
+      - ls
+      - --format
+      - "{% raw %}{{ .Name }}{% endraw %}"
+  register: swarm_secrets
+  changed_when: false
+  when: "'tag_Role_swarm_manager' in group_names"
+
+# stdin_add_newline: false matters. A trailing newline inside DATABASE_URL
+# makes Django connect to a host name ending in \n, which fails with a DNS
+# error that says nothing about the real cause.
+- name: Create the missing secrets from SSM
+  ansible.builtin.command:
+    argv:
+      - docker
+      - secret
+      - create
+      - "{{ item }}"
+      - "-"
+    stdin: "{{ lookup('amazon.aws.aws_ssm', '/rmit/prod/' ~ item, decrypt=true) }}"
+    stdin_add_newline: false
+  loop:
+    - SECRET_KEY
+    - DATABASE_URL
+  when:
+    - "'tag_Role_swarm_manager' in group_names"
+    - item not in swarm_secrets.stdout_lines
+  no_log: true

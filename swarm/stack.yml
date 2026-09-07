@@ -6,11 +6,18 @@ services:
     image: ${ECR}/rmit-api:${GIT_SHA}
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.prod
-      ALLOWED_HOSTS: "rmit-alb-1002033451.us-east-1.elb.amazonaws.com,127.0.0.1"
+      # Every value below is interpolated from the environment of the
+      # `docker stack deploy` command, which Jenkins fills from SSM. Nothing
+      # here names an account, a bucket or a load balancer, so redeploying the
+      # CloudFormation stacks needs no edit to this file.
+      #
+      # ALLOWED_HOSTS must contain the ALB's DNS name: prod settings reject any
+      # other Host header with 400, and the browser reaches the API through the
+      # load balancer. 127.0.0.1 is for the container's own health check.
+      ALLOWED_HOSTS: "${ALB_DNS},127.0.0.1"
       USE_S3: "True"
-      # MODIFY THIS TO USE THE FINAL S3 BUCKET NAME YOU CREATE IN THE AWS CONSOLE
-      AWS_STORAGE_BUCKET_NAME: "rmit-store-media-s4131861-test-1"
-      AWS_S3_REGION_NAME: "us-east-1"
+      AWS_STORAGE_BUCKET_NAME: "${MEDIA_BUCKET}"
+      AWS_S3_REGION_NAME: "${AWS_REGION}"
       # IN THE ORIGINAL ENV FILE, GIT_COMMIT IS SUPPOSED TO BE SET TO THE GIT SHA OF THE COMMIT THAT BUILT THE IMAGE
       # JENKINS WILL SET THIS ENV VAR AUTOMATICALLY WHEN IT BUILDS THE IMAGE, SO YOU CAN LEAVE IT AS IS
       GIT_COMMIT: ${GIT_SHA}

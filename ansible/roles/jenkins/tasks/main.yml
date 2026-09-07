@@ -43,3 +43,32 @@
     name: jenkins
     enabled: true
     state: started
+
+- name: Give the jenkins user an SSH key
+  ansible.builtin.user:
+    name: jenkins
+    generate_ssh_key: true
+    ssh_key_type: ed25519
+    ssh_key_file: .ssh/id_ed25519
+
+- name: Read the public half
+  ansible.builtin.slurp:
+    src: /var/lib/jenkins/.ssh/id_ed25519.pub
+  register: jenkins_pubkey
+
+- name: Publish it so the deploy targets can authorise it
+  ansible.builtin.command:
+    argv:
+      - aws
+      - ssm
+      - put-parameter
+      - --region
+      - "{{ aws_region }}"
+      - --name
+      - /rmit/JENKINS_PUBKEY
+      - --type
+      - String
+      - --overwrite
+      - --value
+      - "{{ jenkins_pubkey.content | b64decode | trim }}"
+  changed_when: false

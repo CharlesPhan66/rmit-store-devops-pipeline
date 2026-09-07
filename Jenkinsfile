@@ -23,7 +23,10 @@ pipeline {
                     env.STAGING     = "ec2-user@${stagingIp}"
                     env.STAGING_URL = "http://${stagingIp}:8081"
                     env.SWARM_MGR   = "ec2-user@" + ssm('/rmit/prod/SWARM_MGR_IP')
-                    env.PROD_URL    = "http://" + ssm('/rmit/prod/ALB_DNS')
+
+                    env.ALB_DNS      = ssm('/rmit/prod/ALB_DNS')
+                    env.MEDIA_BUCKET = ssm('/rmit/MEDIA_BUCKET')
+                    env.PROD_URL     = "http://${env.ALB_DNS}"
 
                     env.AWS_REGION  = env.ECR.split('\\.')[3]
 
@@ -129,19 +132,17 @@ pipeline {
         // NOTE: BY THIS, WE DO NOT NEED DEPLOY.SH ANYMORE, WE CAN JUST USE JENKINSFILE TO DEPLOY STAGING AND PROD
         stage('Deploy Staging') {
             steps {
-                sshagent(['app-host-key']) {
-                    sh """
-                        scp -o StrictHostKeyChecking=no docker-compose.prod.yml ${STAGING}:~/deploy/
-                        scp -o StrictHostKeyChecking=no docker/client-nginx-compose.conf ${STAGING}:~/deploy/docker/
+                sh """
+                    scp -o StrictHostKeyChecking=no docker-compose.prod.yml ${STAGING}:~/deploy/
+                    scp -o StrictHostKeyChecking=no docker/client-nginx-compose.conf ${STAGING}:~/deploy/docker/
 
-                        ssh -o StrictHostKeyChecking=no ${STAGING} \
-                          'cd ~/deploy \
-                           && export ECR=${env.ECR} IMAGE_TAG=${env.SHA} \
-                           && docker compose --env-file compose.env -f docker-compose.prod.yml pull \
-                           && docker compose --env-file compose.env -f docker-compose.prod.yml up -d --remove-orphans \
-                           && docker image prune -f'
-                    """
-                }
+                    ssh -o StrictHostKeyChecking=no ${STAGING} \
+                      'cd ~/deploy \
+                       && export ECR=${env.ECR} IMAGE_TAG=${env.SHA} \
+                       && docker compose --env-file compose.env -f docker-compose.prod.yml pull \
+                       && docker compose --env-file compose.env -f docker-compose.prod.yml up -d --remove-orphans \
+                       && docker image prune -f'
+                """
                 // Printed so a rollback by hand needs no lookup: ssh in, cd ~/deploy,
                 // and rerun the same two exports with an older IMAGE_TAG.
                 echo "Deployed ${env.SHA} to ${env.STAGING_URL} from ${env.ECR}"
@@ -173,38 +174,36 @@ pipeline {
                 }
             }
             steps {
-                sshagent(['app-host-key']) {
-                    sh """
-                        ssh -o StrictHostKeyChecking=no ${SWARM_MGR} '
-                            set -e
-                            docker service rm rmit-migrate 2>/dev/null || true
+                sh """
+                    ssh -o StrictHostKeyChecking=no ${SWARM_MGR} '
+                        set -e
+                        docker service rm rmit-migrate 2>/dev/null || true
 
-                            docker service create --name rmit-migrate --detach \
-                                --restart-condition none \
-                                --secret SECRET_KEY \
-                                --secret DATABASE_URL \
-                                --env DJANGO_SETTINGS_MODULE=config.settings.prod \
-                                --env ALLOWED_HOSTS=127.0.0.1 \
-                                --with-registry-auth \
-                                ${ECR}/rmit-api:${env.SHA} python manage.py migrate --noinput
+                        docker service create --name rmit-migrate --detach \
+                            --restart-condition none \
+                            --secret SECRET_KEY \
+                            --secret DATABASE_URL \
+                            --env DJANGO_SETTINGS_MODULE=config.settings.prod \
+                            --env ALLOWED_HOSTS=127.0.0.1 \
+                            --with-registry-auth \
+                            ${ECR}/rmit-api:${env.SHA} python manage.py migrate --noinput
 
-                            for i in \$(seq 1 60); do
-                                STATE=\$(docker service ps rmit-migrate --format '{{.CurrentState}}' | head -n1)
-                                case "\$STATE" in
-                                    Complete*) echo "Migration complete"; break;;
-                                    Failed*|Rejected*)
-                                        docker service logs rmit-migrate
-                                        docker service rm rmit-migrate
-                                        exit 1 ;;
-                                esac
-                                sleep 5
-                            done
+                        for i in \$(seq 1 60); do
+                            STATE=\$(docker service ps rmit-migrate --format '{{.CurrentState}}' | head -n1)
+                            case "\$STATE" in
+                                Complete*) echo "Migration complete"; break;;
+                                Failed*|Rejected*)
+                                    docker service logs rmit-migrate
+                                    docker service rm rmit-migrate
+                                    exit 1 ;;
+                            esac
+                            sleep 5
+                        done
 
-                            docker service logs rmit-migrate
-                            docker service rm rmit-migrate
-                        '
-                    """
-                }
+                        docker service logs rmit-migrate
+                        docker service rm rmit-migrate
+                    '
+                """
             }
         }
 
@@ -216,19 +215,20 @@ pipeline {
                 }
             }
             steps {
-                sshagent(['app-host-key']) {
-                    sh """
-                        ssh -o StrictHostKeyChecking=no ${SWARM_MGR} 'mkdir -p ~/deploy/swarm ~/deploy/docker'
-                        scp -o StrictHostKeyChecking=no swarm/stack.yml ${SWARM_MGR}:~/deploy/swarm/
-                        scp -o StrictHostKeyChecking=no docker/client-nginx-compose.conf ${SWARM_MGR}:~/deploy/docker/
+                sh """
+                    ssh -o StrictHostKeyChecking=no ${SWARM_MGR} 'mkdir -p ~/deploy/swarm ~/deploy/docker'
+                    scp -o StrictHostKeyChecking=no swarm/stack.yml ${SWARM_MGR}:~/deploy/swarm/
+                    scp -o StrictHostKeyChecking=no docker/client-nginx-compose.conf ${SWARM_MGR}:~/deploy/docker/
 
-                        ssh -o StrictHostKeyChecking=no ${SWARM_MGR} '
-                            cd ~/deploy &&
-                            ECR=${ECR} GIT_SHA=${env.SHA} docker stack deploy \
-                                -c swarm/stack.yml --with-registry-auth rmit
-                        '
-                    """
-                }
+                    ssh -o StrictHostKeyChecking=no ${SWARM_MGR} '
+                        cd ~/deploy &&
+                        ECR=${ECR} GIT_SHA=${env.SHA} \
+                        ALB_DNS=${env.ALB_DNS} MEDIA_BUCKET=${env.MEDIA_BUCKET} \
+                        AWS_REGION=${env.AWS_REGION} \
+                        docker stack deploy \
+                            -c swarm/stack.yml --with-registry-auth rmit
+                    '
+                """
             }
         }
 
