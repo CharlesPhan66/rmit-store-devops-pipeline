@@ -47,26 +47,29 @@ git checkout "$GIT_SHA"
 # Consumed by ${IMAGE_TAG} in docker-compose.prod.yml.
 export IMAGE_TAG="$GIT_SHA"
 
-# --- Registry authentication ------------------------------------------------
-# >>> As committed, docker-compose.prod.yml points at Amazon ECR, so the block
-# >>> below MUST be uncommented. Leave it commented only if you have switched
-# >>> those three image: lines back to a PUBLIC Docker Hub repository, which
-# >>> needs no login to pull.
+# --- Registry ----------------------------------------------------------------
+# Consumed by ${ECR} in docker-compose.prod.yml, which contains no account id
+# of its own. Derived here rather than written down, so this repository deploys
+# into whichever AWS account it is checked out in - the requirement the
+# assignment states as making the pipeline reproducible.
+#
+# The value is identical to /rmit/ECR_REGISTRY, published by
+# cloudformation/data.yml. It is computed locally instead of read from SSM only
+# because the deploy has to log in anyway, and get-caller-identity answers with
+# what the login already needs. Either source gives the same string.
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+export ECR="${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
-# Uncomment for ECR, or for a private Docker Hub repository.
 # Log in on EVERY deploy, not once: an ECR token is valid for 12 hours, so a
 # one-off login works all day and then fails the next morning with
 # `no basic auth credentials` - a symptom that sends you looking in the wrong
 # place. The login costs well under a second.
-
-# This needs the aws CLI on the host (`dnf install -y awscli-2`) and an
+#
+# This needs the aws CLI on the host (installed by the docker role) and an
 # instance profile attached (LabInstanceProfile on Learner Lab). No static AWS
 # keys anywhere: that is the whole point of using ECR over Docker Hub.
-
-ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 aws ecr get-login-password --region "$AWS_REGION" \
-| docker login --username AWS --password-stdin \
-    "${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+| docker login --username AWS --password-stdin "$ECR"
 
 # --- Release ----------------------------------------------------------------
 # Pull the images Jenkins already built and pushed, then start the stack.

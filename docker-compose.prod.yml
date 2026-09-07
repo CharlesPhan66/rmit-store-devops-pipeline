@@ -17,6 +17,21 @@
 #               and Compose re-parses the file on each invocation
 #   -f          because without it Compose reads docker-compose.yml, the dev stack
 #
+# ${ECR} must be in the environment too - see the Registry note below. deploy.sh
+# exports it; by hand:
+#
+#   export ECR="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com"
+#
+# To run the two images built above without any registry at all, tag them under
+# a prefix and name it here instead:
+#
+#   docker build -f docker/api.Dockerfile --target runtime -t local/rmit-api:local .
+#   export ECR=local IMAGE_TAG=local
+#
+# Skip `pull` in that case - the images exist locally and there is nothing to
+# fetch. Leave ECR unset entirely and Compose renders `/rmit-api:latest`, which
+# is not a valid image reference.
+#
 # Why build is separate from up:
 #   - `docker compose --build` delegates to buildx, which `dnf install docker`
 #     on AL2023 does not provide. Plain `docker build` needs no plugin.
@@ -41,8 +56,6 @@
 # Three services, not four. The database is managed infrastructure now, which is
 # what production actually looks like. The dev stack keeps its db container
 # because its job is to come up anywhere Docker runs, with no AWS at all.
-
-# Migrate docker hub to ecr: docker tag charlesphan66/rmit-api:latest 123456789012.dkr.ecr.ap-southeast-2.amazonaws.com/rmit-api:latest
 
 name: rmit-store-prod
 
@@ -71,19 +84,29 @@ services:
       retries: 10
 
   # --- Registry ---------------------------------------------------------------
-  # All three application services below pull from Amazon ECR. The registry host
-  # is <account-id>.dkr.ecr.<region>.amazonaws.com, and ${IMAGE_TAG} is exported
-  # by deploy.sh (see deploy.sh.example) from the commit Jenkins is deploying.
+  # All three application services below pull from ${ECR}, and neither the
+  # account id nor the region is written down anywhere in this file. That is
+  # deliberate: the same commit has to deploy into whichever AWS account the
+  # marker happens to be running, and a hardcoded 123456789012.dkr.ecr.* would
+  # pull from an account they cannot see and fail with `no basic auth
+  # credentials`.
   #
-  # Switching registries means editing all THREE image: lines, never just one.
+  # Both variables are exported by deploy.sh (see deploy.sh.example):
+  #   ECR        <account-id>.dkr.ecr.<region>.amazonaws.com, derived on the host
+  #              from `aws sts get-caller-identity` - the same value
+  #              cloudformation/data.yml publishes at /rmit/ECR_REGISTRY and the
+  #              same variable name swarm/stack.yml uses, so Compose and Swarm
+  #              read one registry setting, not two.
+  #   IMAGE_TAG  the commit Jenkins is deploying.
+  #
   # `migrate` and `api` must always be the same image: migrate runs that
   # backend's own manage.py, so a mismatch migrates with one release's schema and
   # then serves another release's code.
   #
-  # To go back to Docker Hub:
-  #   image: <dockerhub-user>/rmit-api:${IMAGE_TAG:-latest}
-  # A public Docker Hub repo needs no login to pull. ECR always does - see the
-  # commented block in deploy.example.sh, and note the token expires after 12h.
+  # To go back to Docker Hub, change nothing here - export ECR=<dockerhub-user>
+  # in deploy.sh instead, since <dockerhub-user>/rmit-api:<tag> has the same
+  # shape. A public Docker Hub repo needs no login to pull; ECR always does, and
+  # its token expires after 12h.
   #
   # ${IMAGE_TAG:-latest} keeps a hand-typed `docker compose up` working when the
   # variable is unset, which is useful while debugging.
@@ -91,7 +114,7 @@ services:
   # --- Migrations ------------------------------------------------------------
   # Same image as api - same build, only the command differs.
   migrate:
-    image: 222431607375.dkr.ecr.us-east-1.amazonaws.com/rmit-api:${IMAGE_TAG:-latest}
+    image: ${ECR}/rmit-api:${IMAGE_TAG:-latest}
     command: python manage.py migrate --noinput
     # Because S3 is used, instead of having environment:, we use env_file: to load the environment variables from compose.env, which is not committed to git. This is to avoid exposing sensitive information like AWS keys and RDS password in the source code.
     env_file:
@@ -106,7 +129,7 @@ services:
     # Built by the `docker build --target runtime` command in the header.
     # `--target runtime` is compulsory: stage `test` sits at the end of
     # api.Dockerfile, and Docker uses the LAST stage when no target is given.
-    image: 222431607375.dkr.ecr.us-east-1.amazonaws.com/rmit-api:${IMAGE_TAG:-latest}
+    image: ${ECR}/rmit-api:${IMAGE_TAG:-latest}
     # env_file instead of environment: to load the environment variables from compose.env, which is not committed to git. This is to avoid exposing sensitive information like AWS keys and RDS password in the source code.
     env_file:
       - ./compose.env
@@ -125,7 +148,7 @@ services:
 
   # --- Frontend --------------------------------------------------------------
   client:
-    image: 222431607375.dkr.ecr.us-east-1.amazonaws.com/rmit-client:${IMAGE_TAG:-latest}
+    image: ${ECR}/rmit-client:${IMAGE_TAG:-latest}
     environment:
       API_BASE_URL: /api
     volumes:
