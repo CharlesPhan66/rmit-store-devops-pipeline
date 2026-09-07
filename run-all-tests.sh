@@ -16,6 +16,19 @@ mkdir -p reports/coverage-html reports/e2e-html-report
 # =========================================================================
 echo ">>> [0/4] Checking Node & Browser Dependencies..."
 
+# Allocate swap memory if system has 0 swap (prevents browser launch deadlock)
+if [ "$(free -m | awk '/Swap:/ {print $2}')" -eq 0 ]; then
+  echo ">>> [0/5] No swap detected. Allocating 2GB swapfile..."
+  if [ ! -f /swapfile ]; then
+    sudo dd if=/dev/zero of=/swapfile bs=128M count=16
+    sudo chmod 600 /swapfile
+    sudo mkswap /swapfile
+  fi
+  sudo swapon /swapfile 2>/dev/null || true
+  grep -q "/swapfile" /etc/fstab || echo '/swapfile swap swap defaults 0 0' | sudo tee -a /etc/fstab
+fi
+
+# Install node dependencies and browser binaries if absent
 if [ ! -d "node_modules" ]; then
   echo "Installing Node dev dependencies..."
   npm install -D @playwright/test vitest vite @vitejs/plugin-vue jsdom @vitest/coverage-v8 pinia axios
