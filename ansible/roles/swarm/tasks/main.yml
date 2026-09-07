@@ -53,7 +53,7 @@
       - create
       - "{{ item }}"
       - "-"
-    stdin: "{{ lookup('amazon.aws.aws_ssm', '/rmit/prod/' ~ item, decrypt=true) }}"
+    stdin: "{{ lookup('amazon.aws.aws_ssm', '/rmit/prod/' ~ item, decrypt=true, region=aws_region) }}"
     stdin_add_newline: false
   loop:
     - SECRET_KEY

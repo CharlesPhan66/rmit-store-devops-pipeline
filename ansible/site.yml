@@ -39,5 +39,5 @@
     - name: Authorise the Jenkins public key for ec2-user
       ansible.posix.authorized_key:
         user: ec2-user
-        key: "{{ lookup('amazon.aws.aws_ssm', '/rmit/JENKINS_PUBKEY') }}"
+        key: "{{ lookup('amazon.aws.aws_ssm', '/rmit/JENKINS_PUBKEY', region=aws_region) }}"
         state: present

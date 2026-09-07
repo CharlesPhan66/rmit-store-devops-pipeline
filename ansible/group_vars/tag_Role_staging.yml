@@ -23,4 +23,4 @@ client_url: "http://{{ ansible_host }}:8081"
 # and NOT under ssm_prefix. Only the three secrets in roles/app are per-environment.
 # Until the data stack exists, put it there by hand:
 #   aws ssm put-parameter --name /rmit/MEDIA_BUCKET --type String --value <bucket>
-media_bucket: "{{ lookup('amazon.aws.aws_ssm', '/rmit/MEDIA_BUCKET') }}"
+media_bucket: "{{ lookup('amazon.aws.aws_ssm', '/rmit/MEDIA_BUCKET', region=aws_region) }}"

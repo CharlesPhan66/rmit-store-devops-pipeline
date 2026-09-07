@@ -236,6 +236,32 @@ Resources:
           FromPort: 8080
           ToPort: 8080
           CidrIp: !Ref AdminCidr
+        # GitHub's webhook senders, so a push triggers a build instead of
+        # Jenkins polling every two minutes. These four ranges are the IPv4
+        # entries of the "hooks" array in https://api.github.com/meta - GitHub
+        # publishes them precisely so they can be allowed like this. They change
+        # rarely; a webhook that suddenly stops arriving is worth re-checking
+        # against that endpoint.
+        #
+        # Listing them beats opening 8080 to 0.0.0.0/0: the Jenkins UI has no
+        # TLS in front of it, so a wide-open port would put an admin login on
+        # the public internet in plaintext.
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 192.30.252.0/22
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 185.199.108.0/22
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 140.82.112.0/20
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 143.55.64.0/20
       Tags:
         - Key: Name
           Value: !Sub "${EnvironmentName}-jenkins-sg"

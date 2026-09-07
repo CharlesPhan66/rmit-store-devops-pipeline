@@ -338,15 +338,42 @@ Resources:
       Type: String
       Value: !GetAtt JenkinsServer.PrivateIp
 
+  # The one address in this stack that must survive a Learner Lab session
+  # ending. GitHub's webhook points at a URL, and a lab session stop/start
+  # hands the instance a brand new public IP - which would silently break the
+  # trigger every morning. An Elastic IP is the only address here that is not
+  # reassigned, so the webhook is written once and never revisited.
+  #
+  # It is attached to Jenkins alone. Staging and the swarm nodes are reached
+  # through the VPC by private IP, and production through the load balancer's
+  # own stable DNS name, so none of them need one.
+  JenkinsEip:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref JenkinsServer
+      Tags:
+        - Key: Name
+          Value: jenkins-eip
+
+  JenkinsPublicIpParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /rmit/JENKINS_PUBLIC_IP
+      Type: String
+      Value: !Ref JenkinsEip
+
 Outputs:
 
   AlbDns:
     Description: Public address of the production site
     Value: !GetAtt Alb.DNSName
 
+  # The Elastic IP, not the instance's own public address: this is the value
+  # the GitHub webhook URL is built from, so it has to be the stable one.
   JenkinsUrl:
-    Description: Jenkins UI
-    Value: !Sub "http://${JenkinsServer.PublicIp}:8080"
+    Description: Jenkins UI, and the host half of the GitHub webhook URL
+    Value: !Sub "http://${JenkinsEip}:8080"
 
   StagingUrl:
     Value: !Sub "http://${StagingServer.PublicIp}:8081"

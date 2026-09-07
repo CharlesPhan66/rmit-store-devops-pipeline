@@ -129,10 +129,10 @@ aws ssm get-parameters-by-path --path /rmit --recursive \
 COUNT=$(aws ssm get-parameters-by-path --path /rmit --recursive \
           --query 'length(Parameters)' --output text)
 
-# 8 String from CloudFormation + the 5 written here. JENKINS_PUBKEY makes 14,
+# 9 String from CloudFormation + the 5 written here. JENKINS_PUBKEY makes 15,
 # but Ansible has not run yet at this point in the runbook.
-if [ "$COUNT" -lt 13 ]; then
-  die "expected at least 13 parameters, found $COUNT. A CloudFormation stack is
+if [ "$COUNT" -lt 14 ]; then
+  die "expected at least 14 parameters, found $COUNT. A CloudFormation stack is
        probably missing - check that all four deployed."
 fi
 
