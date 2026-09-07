@@ -22,11 +22,19 @@ admin_email: admin@rmit.edu.au
 staging_db: rmit_staging
 db_master_user: rmit
 
-# Derived from the inventory, so no IP is ever written down. ansible_host is the
-# private IP the aws_ec2 plugin returned — the same address the Jenkins smoke
-# stage calls, which is exactly what ALLOWED_HOSTS has to contain.
-allowed_hosts: "{{ ansible_host }},127.0.0.1,localhost"
-client_url: "http://{{ ansible_host }}:8081"
+# Private IP is used by Jenkins; public IP is used by browsers.
+# Both must be allowed because production validates the Host header.
+# 127.0.0.1 is required for the API container health check.
+allowed_hosts: "{{ ansible_host }},{{ public_ip_address | default(ansible_host) }},127.0.0.1,localhost"
+
+# The address a person clicks, so password-reset links have to use the public
+# one. A Learner Lab session ending reassigns it, which is why re-running the
+# playbook is part of coming back to the machines.
+client_url: "http://{{ public_ip_address | default(ansible_host) }}:8081"
+
+# Django admin form posts are checked against this. Both origins, because the
+# admin is reachable over either address.
+csrf_trusted_origins: "http://{{ public_ip_address | default(ansible_host) }}:8081,http://{{ ansible_host }}:8081"
 
 # Staging has a bucket of its own. Sharing production's would let seed_demo
 # overwrite the very objects production's rows point at - the app hardcodes the

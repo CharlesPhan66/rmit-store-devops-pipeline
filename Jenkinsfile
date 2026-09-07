@@ -184,7 +184,12 @@ pipeline {
             }
         }
 
-        stage('Migrate prod') {
+        // Run migration, admin creation and demo seeding once per release,
+        // before deploying replicas. Seeding is intentional and idempotent:
+        // it only adds missing data, and --flush is never used to protect
+        // existing production data. Admin credentials are injected via Docker
+        // secrets, not --env, so they are not exposed in the Swarm log.
+        stage('Migrate and seed prod') {
             steps {
                 sh """
                     ssh -o StrictHostKeyChecking=no ${SWARM_MGR} '
@@ -195,12 +200,18 @@ pipeline {
                             --restart-condition none \
                             --secret SECRET_KEY \
                             --secret DATABASE_URL \
+                            --secret DJANGO_SUPERUSER_PASSWORD \
                             --env DJANGO_SETTINGS_MODULE=config.settings.prod \
                             --env ALLOWED_HOSTS=127.0.0.1 \
+                            --env DJANGO_SUPERUSER_EMAIL=admin@rmit.edu.au \
+                            --env USE_S3=True \
+                            --env AWS_STORAGE_BUCKET_NAME=${env.MEDIA_BUCKET} \
+                            --env AWS_S3_REGION_NAME=${env.AWS_REGION} \
                             --with-registry-auth \
-                            ${ECR}/rmit-api:${env.SHA} python manage.py migrate --noinput
+                            ${ECR}/rmit-api:${env.SHA} \
+                            sh -c "python manage.py migrate --noinput && python manage.py create_admin && python manage.py seed_demo"
 
-                        for i in \$(seq 1 60); do
+                        for i in \$(seq 1 120); do
                             STATE=\$(docker service ps rmit-migrate --format '{{.CurrentState}}' | head -n1)
                             case "\$STATE" in
                                 Complete*) echo "Migration complete"; break;;
@@ -236,6 +247,11 @@ pipeline {
                     '
                 """
 
+                // Wait for the production load balancer to serve the newly deployed commit.
+                // The rolling update may temporarily route requests to old and new tasks.
+                // Require 10 consecutive responses with the expected SHA before continuing.
+                // Retry for up to 80 attempts (approximately 4 minutes); fail the pipeline
+                // if the load balancer never settles on the new version.
                 sh """
                     HITS=0
                     for i in \$(seq 1 80); do

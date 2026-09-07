@@ -42,23 +42,29 @@
   changed_when: false
   when: "'tag_Role_swarm_manager' in group_names"
 
-# stdin_add_newline: false matters. A trailing newline inside DATABASE_URL
-# makes Django connect to a host name ending in \n, which fails with a DNS
-# error that says nothing about the real cause.
+# stdin_add_newline: false avoids a trailing newline: it becomes part of DATABASE_URL and can cause
+# Django to resolve the database hostname incorrectly.
+
+# Secret names must match the environment variables expected by the app.
+# Docker secrets avoid exposing sensitive values in the Swarm raft log,
+# unlike service-level --env variables.
 - name: Create the missing secrets from SSM
   ansible.builtin.command:
     argv:
       - docker
       - secret
       - create
-      - "{{ item }}"
+      - "{{ item.name }}"
       - "-"
-    stdin: "{{ lookup('amazon.aws.aws_ssm', '/rmit/prod/' ~ item, decrypt=true, region=aws_region) }}"
+    stdin: "{{ lookup('amazon.aws.aws_ssm', item.param, decrypt=true, region=aws_region) }}"
     stdin_add_newline: false
   loop:
-    - SECRET_KEY
-    - DATABASE_URL
+    - { name: SECRET_KEY, param: /rmit/prod/SECRET_KEY }
+    - { name: DATABASE_URL, param: /rmit/prod/DATABASE_URL }
+    - { name: DJANGO_SUPERUSER_PASSWORD, param: /rmit/prod/ADMIN_PASSWORD }
+  loop_control:
+    label: "{{ item.name }}"
   when:
     - "'tag_Role_swarm_manager' in group_names"
-    - item not in swarm_secrets.stdout_lines
+    - item.name not in swarm_secrets.stdout_lines
   no_log: true

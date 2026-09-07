@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 #
-# Put the six SecureString parameters the pipeline needs into SSM.
+# Put the seven SecureString parameters the pipeline needs into SSM.
 #
 #   ./scripts/put-secrets.sh
 #
 # CloudFormation cannot do this: AWS::SSM::Parameter accepts String and
-# StringList only, never SecureString. So these six live outside the
+# StringList only, never SecureString. So these seven live outside the
 # templates, and this script is the whole of that manual step.
 #
 # Run it once, after the rmit-data stack exists. Re-running is safe: the two
 # database parameters are overwritten, and SECRET_KEY is only ever created.
 #
-# For automation, export RDS_PASS and ADMIN_PASS beforehand and nothing is
+# For automation, export RDS_PASS, ADMIN_PASS and PROD_ADMIN_PASS beforehand
 # prompted. Prefer the prompts interactively - a typed password ends up in
 # ~/.zsh_history and in the process table.
 
@@ -104,16 +104,31 @@ aws ssm put-parameter --name /rmit/RDS_MASTER_PASSWORD \
 # aborts on an empty database without it, so the staging deploy needs both.
 # Staging only: production is never seeded with demo data.
 
+# One per environment, for the same reason SECRET_KEY is: a staging password
+# that leaked must not open the production admin.
 if [ -z "${ADMIN_PASS:-}" ]; then
-  read -rsp 'Staging store admin password (for admin@rmit.edu.au): ' ADMIN_PASS
+  read -rsp 'STAGING store admin password (admin@rmit.edu.au): ' ADMIN_PASS
   echo
 fi
-[ -n "$ADMIN_PASS" ] || die "The admin password must not be empty"
+[ -n "$ADMIN_PASS" ] || die "The staging admin password must not be empty"
+
+if [ -z "${PROD_ADMIN_PASS:-}" ]; then
+  read -rsp 'PRODUCTION store admin password (admin@rmit.edu.au): ' PROD_ADMIN_PASS
+  echo
+fi
+[ -n "$PROD_ADMIN_PASS" ] || die "The production admin password must not be empty"
 
 echo "==> /rmit/staging/ADMIN_PASSWORD"
 aws ssm put-parameter --name /rmit/staging/ADMIN_PASSWORD \
   --type SecureString --overwrite \
   --value "$ADMIN_PASS" >/dev/null
+
+# Ansible turns this into the Docker secret DJANGO_SUPERUSER_PASSWORD, which
+# the api entrypoint exports as an env var of the same name.
+echo "==> /rmit/prod/ADMIN_PASSWORD"
+aws ssm put-parameter --name /rmit/prod/ADMIN_PASSWORD \
+  --type SecureString --overwrite \
+  --value "$PROD_ADMIN_PASS" >/dev/null
 
 # --- SECRET_KEY, one per environment -----------------------------------------
 # Created, never overwritten. Rotating this signing key invalidates every
@@ -132,7 +147,7 @@ for ENV in staging prod; do
   fi
 done
 
-unset RDS_PASS ADMIN_PASS
+unset RDS_PASS ADMIN_PASS PROD_ADMIN_PASS
 
 # --- Verify ------------------------------------------------------------------
 
@@ -144,10 +159,10 @@ aws ssm get-parameters-by-path --path /rmit --recursive \
 COUNT=$(aws ssm get-parameters-by-path --path /rmit --recursive \
           --query 'length(Parameters)' --output text)
 
-# 10 String from CloudFormation + the 6 written here. JENKINS_PUBKEY makes 17,
+# 10 String from CloudFormation + the 7 written here. JENKINS_PUBKEY makes 18,
 # but Ansible has not run yet at this point in the runbook.
-if [ "$COUNT" -lt 16 ]; then
-  die "expected at least 16 parameters, found $COUNT. A CloudFormation stack is
+if [ "$COUNT" -lt 17 ]; then
+  die "expected at least 17 parameters, found $COUNT. A CloudFormation stack is
        probably missing - check that all four deployed."
 fi
 
