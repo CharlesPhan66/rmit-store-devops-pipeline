@@ -17,15 +17,18 @@ deploy_dir: /home/ec2-user/deploy
 # will demand a password it has no way to receive.
 admin_email: admin@rmit.edu.au
 
+# Staging's own database on the shared RDS instance. The master user is the one
+# cloudformation/data.yml created; it owns both databases.
+staging_db: rmit_staging
+db_master_user: rmit
+
 # Derived from the inventory, so no IP is ever written down. ansible_host is the
 # private IP the aws_ec2 plugin returned — the same address the Jenkins smoke
 # stage calls, which is exactly what ALLOWED_HOSTS has to contain.
 allowed_hosts: "{{ ansible_host }},127.0.0.1,localhost"
 client_url: "http://{{ ansible_host }}:8081"
 
-# Written to SSM by cloudformation/data.yml. Note the absolute path: the bucket
-# is shared by staging and production, so it lives at the root of the namespace
-# and NOT under ssm_prefix. Only the three secrets in roles/app are per-environment.
-# Until the data stack exists, put it there by hand:
-#   aws ssm put-parameter --name /rmit/MEDIA_BUCKET --type String --value <bucket>
-media_bucket: "{{ lookup('amazon.aws.aws_ssm', '/rmit/MEDIA_BUCKET', region=aws_region) }}"
+# Staging has a bucket of its own. Sharing production's would let seed_demo
+# overwrite the very objects production's rows point at - the app hardcodes the
+# "media" prefix, so a bucket is the smallest unit we can separate.
+media_bucket: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/MEDIA_BUCKET', region=aws_region) }}"

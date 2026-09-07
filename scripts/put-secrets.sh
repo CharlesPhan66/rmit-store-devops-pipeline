@@ -11,15 +11,16 @@
 # Run it once, after the rmit-data stack exists. Re-running is safe: the two
 # database parameters are overwritten, and SECRET_KEY is only ever created.
 #
-# For automation, export RDS_PASS and STAGING_PASS beforehand and nothing is
+# For automation, export RDS_PASS and ADMIN_PASS beforehand and nothing is
 # prompted. Prefer the prompts interactively - a typed password ends up in
 # ~/.zsh_history and in the process table.
 
 set -euo pipefail
 
-RDS_ENDPOINT_PARAM=/rmit/prod/RDS_ENDPOINT
+RDS_ENDPOINT_PARAM=/rmit/RDS_ENDPOINT
 DB_USER=rmit
 DB_NAME=rmit_store
+STAGING_DB_NAME=rmit_staging
 
 die() { printf '\nerror: %s\n' "$1" >&2; exit 1; }
 
@@ -57,48 +58,45 @@ reject_url_unsafe() {
 # The RDS master password: exactly the value passed as DbPassword when
 # cloudformation/data.yml was deployed. NoEcho hides it from describe-stacks,
 # so there is no way to read it back - a mismatch here surfaces later as
-# `password authentication failed for user "rmit"` in the production logs.
+# `password authentication failed for user "rmit"` in the deployment logs.
+#
+# One password, because both environments are DATABASES on one instance,
+# reached with the same master account. What separates them is the database
+# name, not the credential.
 if [ -z "${RDS_PASS:-}" ]; then
   read -rsp 'RDS master password (the DbPassword given to data.yml): ' RDS_PASS
   echo
 fi
 reject_url_unsafe "The RDS password" "$RDS_PASS"
 
-# Staging's password authenticates against nothing. It CREATES the account
-# inside the db container of docker-compose.prod.yml, the first time the pgdata
-# volume is initialised. Its only requirement is matching staging's own
-# DATABASE_URL, which this script guarantees by writing both from one value.
-if [ -z "${STAGING_PASS:-}" ]; then
-  read -rsp 'Staging Postgres password (anything, unrelated to RDS): ' STAGING_PASS
-  echo
-fi
-reject_url_unsafe "The staging password" "$STAGING_PASS"
-
 echo
 
-# --- staging: the db container -----------------------------------------------
-# Host `db` is the Compose service name, resolved inside Docker's own network.
-# Staging never opens a connection to RDS, which is why a seed_demo --flush
-# there cannot reach production data.
+# --- Both environments, one instance, two databases --------------------------
+# Staging travels the identical network and secret path to production. That is
+# the whole point: a throwaway container would prove nothing about the security
+# group on 5432, about delivering DATABASE_URL as a secret, or about RDS's
+# master account not being a real superuser.
+#
+# The databases stay separate, so a seed_demo --flush on staging still cannot
+# reach a single production row. Ansible creates rmit_staging on first run -
+# CloudFormation cannot, because RDS has no route out of its private subnet.
 
 echo "==> /rmit/staging/DATABASE_URL"
 aws ssm put-parameter --name /rmit/staging/DATABASE_URL \
   --type SecureString --overwrite \
-  --value "postgres://${DB_USER}:${STAGING_PASS}@db:5432/${DB_NAME}" >/dev/null
-
-echo "==> /rmit/staging/POSTGRES_PASSWORD"
-aws ssm put-parameter --name /rmit/staging/POSTGRES_PASSWORD \
-  --type SecureString --overwrite \
-  --value "$STAGING_PASS" >/dev/null
-
-# --- prod: RDS ---------------------------------------------------------------
-# No POSTGRES_PASSWORD for prod: swarm/stack.yml has no db service, so there is
-# no account for it to create. Writing one would be a parameter nothing reads.
+  --value "postgres://${DB_USER}:${RDS_PASS}@${RDS}:5432/${STAGING_DB_NAME}" >/dev/null
 
 echo "==> /rmit/prod/DATABASE_URL"
 aws ssm put-parameter --name /rmit/prod/DATABASE_URL \
   --type SecureString --overwrite \
   --value "postgres://${DB_USER}:${RDS_PASS}@${RDS}:5432/${DB_NAME}" >/dev/null
+
+# Ansible needs the raw password too, to run CREATE DATABASE. Parsing it back
+# out of a DATABASE_URL would break on the first password containing a colon.
+echo "==> /rmit/RDS_MASTER_PASSWORD"
+aws ssm put-parameter --name /rmit/RDS_MASTER_PASSWORD \
+  --type SecureString --overwrite \
+  --value "$RDS_PASS" >/dev/null
 
 # --- Staging's store administrator -------------------------------------------
 # `manage.py create_admin` reads this from the container environment, which
@@ -134,7 +132,7 @@ for ENV in staging prod; do
   fi
 done
 
-unset RDS_PASS STAGING_PASS ADMIN_PASS
+unset RDS_PASS ADMIN_PASS
 
 # --- Verify ------------------------------------------------------------------
 
@@ -146,10 +144,10 @@ aws ssm get-parameters-by-path --path /rmit --recursive \
 COUNT=$(aws ssm get-parameters-by-path --path /rmit --recursive \
           --query 'length(Parameters)' --output text)
 
-# 9 String from CloudFormation + the 6 written here. JENKINS_PUBKEY makes 16,
+# 10 String from CloudFormation + the 6 written here. JENKINS_PUBKEY makes 17,
 # but Ansible has not run yet at this point in the runbook.
-if [ "$COUNT" -lt 15 ]; then
-  die "expected at least 15 parameters, found $COUNT. A CloudFormation stack is
+if [ "$COUNT" -lt 16 ]; then
+  die "expected at least 16 parameters, found $COUNT. A CloudFormation stack is
        probably missing - check that all four deployed."
 fi
 

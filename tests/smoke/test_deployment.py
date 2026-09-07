@@ -20,7 +20,7 @@ TIMEOUT = 10
 
 pytestmark = [
     pytest.mark.smoke,
-    pytest.mark.skipif(not BASE, reason="BASE_URL chua duoc dat"),
+    pytest.mark.skipif(not BASE, reason="BASE_URL is not set yet"),
 ]
 
 def test_healthz():
@@ -40,7 +40,28 @@ def test_version_matches_deployed_commit():
         assert SHA in response.text, f"Version mismatch: {response.text}"
 
 
-def test_shop_returns_products():
+def test_shop_endpoint_responds():
+    """The catalogue endpoint works end to end: it reaches the database and
+    returns a well-formed page envelope.
+
+    Deliberately says nothing about how many products came back. An empty
+    catalogue is a fact about the DATA, not about the deployment, and a freshly
+    built production database is legitimately empty - only staging is seeded.
+    """
     response = requests.get(f"{BASE}/api/products/", timeout=TIMEOUT)
     assert response.status_code == 200
-    assert response.json()["count"] > 0
+    assert "count" in response.json(), response.text
+
+
+@pytest.mark.skipif(
+    not os.environ.get("EXPECT_CATALOGUE"),
+    reason="Only an environment that gets seeded is expected to hold products",
+)
+def test_shop_returns_products():
+    """Staging only, gated by EXPECT_CATALOGUE.
+
+    This is what proves seed_demo actually ran and that the images it uploaded
+    are readable back out of S3.
+    """
+    response = requests.get(f"{BASE}/api/products/", timeout=TIMEOUT)
+    assert response.json()["count"] > 0, "seed_demo did not populate the catalogue"

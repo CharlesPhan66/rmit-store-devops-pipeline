@@ -25,7 +25,7 @@ pipeline {
                     env.SWARM_MGR   = "ec2-user@" + ssm('/rmit/prod/SWARM_MGR_IP')
 
                     env.ALB_DNS      = ssm('/rmit/prod/ALB_DNS')
-                    env.MEDIA_BUCKET = ssm('/rmit/MEDIA_BUCKET')
+                    env.MEDIA_BUCKET = ssm('/rmit/prod/MEDIA_BUCKET')
                     env.PROD_URL     = "http://${env.ALB_DNS}"
 
                     env.AWS_REGION  = env.ECR.split('\\.')[3]
@@ -172,6 +172,7 @@ pipeline {
                     docker run --rm --network host \
                         -e BASE_URL=${STAGING_URL} \
                         -e GIT_SHA=${env.SHA} \
+                        -e EXPECT_CATALOGUE=1 \
                         -v "\$PWD/reports:/repo/reports" \
                         rmit-api:test-${env.SHA} pytest tests/smoke --junitxml=reports/smoke.xml
                 """
@@ -233,6 +234,30 @@ pipeline {
                         docker stack deploy \
                             -c swarm/stack.yml --with-registry-auth rmit
                     '
+                """
+
+                // `docker stack deploy` returns as soon as the orchestrator has
+                // ACCEPTED the spec, not when the tasks are running. Without this
+                // gate the smoke stage fires a quarter of a second later, reaches
+                // an nginx whose upstream has no task yet, and reports 502 on a
+                // deployment that was in fact perfectly fine.
+                //
+                // Poll the load balancer rather than `docker service ls`: a task
+                // being Running is not the same as the ALB having marked its
+                // target healthy and started sending traffic there. This waits
+                // for the thing the smoke test is about to measure.
+                sh """
+                    for i in \$(seq 1 60); do
+                        CODE=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 ${PROD_URL}/readyz/ || true)
+                        if [ "\$CODE" = "200" ]; then
+                            echo "Production is serving after \$((i * 5))s"
+                            exit 0
+                        fi
+                        echo "waiting for the rollout, /readyz/ says \$CODE"
+                        sleep 5
+                    done
+                    echo "Production never became ready. Not running the smoke tests against it."
+                    exit 1
                 """
             }
         }

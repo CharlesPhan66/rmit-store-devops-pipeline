@@ -13,8 +13,8 @@
 #   docker compose --env-file compose.env -f docker-compose.prod.yml down -v
 #
 # Both flags are required on EVERY command, not just up:
-#   --env-file  because POSTGRES_PASSWORD below is interpolated into this YAML,
-#               and Compose re-parses the file on each invocation
+#   --env-file  because it carries SECRET_KEY and DATABASE_URL into the
+#               containers, and Compose re-parses the file on each invocation
 #   -f          because without it Compose reads docker-compose.yml, the dev stack
 #
 # ${ECR} must be in the environment too - see the Registry note below. Jenkins
@@ -62,26 +62,18 @@ name: rmit-store-prod
 services:
 
   # --- Database --------------------------------------------------------------
-  # To use RDS instead: delete this whole service, delete the depends_on block
-  # in migrate, and point DATABASE_URL in compose.env at the RDS endpoint.
-  # However, the RDS instance must be running long before this stack starts, so there is nothing to wait for.
-  # But for testing purposes, let say you want to compose up quickly to see if the stack works, you can use a db container here. Just remember to delete it before you deploy to AWS.
-  # Ideally for staging, db container should be removed and use RDS instead. The db container is only for testing purposes.
-  # However, you should figure out a way to set RDS up as a service in the compose file,
-  # so that you can compose up and down the whole stack including RDS, no need to manually set up RDS
-  db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: rmit
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: rmit_store
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U rmit -d rmit_store"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+  # There is no db service, deliberately. Staging connects to the rmit_staging
+  # database on the same RDS instance production uses - a different database,
+  # never a different kind of database.
+  #
+  # A throwaway Postgres container would have been simpler, and that is exactly
+  # why it was wrong: the things that actually break on release day are the
+  # security group on 5432, delivering DATABASE_URL as a secret, and RDS's
+  # master account not being a real superuser. A container exercises none of
+  # them, so staging would go green on a release production cannot run.
+  #
+  # RDS is already running long before this stack starts, so there is nothing
+  # here to wait for and migrate needs no depends_on.
 
   # --- Registry ---------------------------------------------------------------
   # All three application services below pull from ${ECR}, and neither the
@@ -120,9 +112,6 @@ services:
     # Because S3 is used, instead of having environment:, we use env_file: to load the environment variables from compose.env, which is not committed to git. This is to avoid exposing sensitive information like AWS keys and RDS password in the source code.
     env_file:
       - ./compose.env
-    depends_on:
-      db:
-        condition: service_healthy
     restart: "no"
 
   # --- API -------------------------------------------------------------------
@@ -163,9 +152,6 @@ services:
     depends_on:
       api:
         condition: service_healthy
-
-volumes:
-  pgdata:
 
 # No media volume anywhere in this file, and that is the point. Uploaded images
 # live in S3, so every replica reads the same bucket and `--scale api=2` shows
