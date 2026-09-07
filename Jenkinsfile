@@ -128,6 +128,16 @@ pipeline {
         //
         // No docker login: the docker role installed amazon-ecr-credential-helper,
         // so pull authenticates from the instance profile every time.
+        //
+        // seed_demo runs on staging and nowhere else. It is idempotent, so
+        // every deploy re-runs it harmlessly, and the smoke test that asserts
+        // /api/products/ returns a non-empty catalogue has something to find -
+        // migrate creates the schema but leaves the database empty. It also
+        // uploads the generated product images, which is the cheapest proof
+        // that USE_S3 and the instance profile actually work.
+        //
+        // Production deliberately has no equivalent: seeding demo data into
+        // real customer records is exactly the accident this split prevents.
         // Still follow the structure after copying the files
         // NOTE: BY THIS, WE DO NOT NEED DEPLOY.SH ANYMORE, WE CAN JUST USE JENKINSFILE TO DEPLOY STAGING AND PROD
         stage('Deploy Staging') {
@@ -141,6 +151,8 @@ pipeline {
                        && export ECR=${env.ECR} IMAGE_TAG=${env.SHA} \
                        && docker compose --env-file compose.env -f docker-compose.prod.yml pull \
                        && docker compose --env-file compose.env -f docker-compose.prod.yml up -d --remove-orphans \
+                       && docker compose --env-file compose.env -f docker-compose.prod.yml \
+                            run --rm --no-deps api python manage.py seed_demo \
                        && docker image prune -f'
                 """
                 // Printed so a rollback by hand needs no lookup: ssh in, cd ~/deploy,
