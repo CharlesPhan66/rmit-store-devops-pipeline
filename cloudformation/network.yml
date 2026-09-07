@@ -298,6 +298,15 @@ Resources:
           FromPort: 8081
           ToPort: 8081
           CidrIp: !Ref AdminCidr
+        # The Smoke staging stage runs pytest from a container on the Jenkins
+        # host with --network host, so the request arrives carrying JenkinsSg.
+        # Without this the stage fails with a connect TIMEOUT rather than a
+        # refusal - the packets are dropped, so nothing on staging ever sees
+        # them and its logs stay empty, which sends you debugging the wrong box.
+        - IpProtocol: tcp
+          FromPort: 8081
+          ToPort: 8081
+          SourceSecurityGroupId: !Ref JenkinsSg
       Tags:
         - Key: Name
           Value: !Sub "${EnvironmentName}-staging-sg"
