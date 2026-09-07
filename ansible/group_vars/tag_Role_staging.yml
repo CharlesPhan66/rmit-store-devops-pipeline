@@ -1,16 +1,16 @@
 ---
 # Variables for the staging host. The group name comes from the EC2 tag
 # Role=staging, so renaming the machine itself changes nothing here.
-# Only repo_url is typed by hand. Everything else is derived from the inventory
+# Nothing is typed by hand here: every value is derived from the inventory
 # or read from SSM, so this file survives the infrastructure being rebuilt with
 # different addresses.
 
 ssm_prefix: /rmit/staging
 
-repo_url: git@github.com:rmit-vietnam-computing-technologies/2026b-cosc2767-a2-sg-team-13.git
-
-# "…/repo-name.git" -> "/home/ec2-user/repo-name"
-repo_dir: "/home/ec2-user/{{ repo_url.split('/')[-1] | replace('.git', '') }}"
+# Where Jenkins drops docker-compose.prod.yml and the nginx conf, and where this
+# role writes compose.env beside them. No git checkout lives here: the host
+# holds no GitHub credential at all.
+deploy_dir: /home/ec2-user/deploy
 
 # Derived from the inventory, so no IP is ever written down. ansible_host is the
 # private IP the aws_ec2 plugin returned — the same address the Jenkins smoke

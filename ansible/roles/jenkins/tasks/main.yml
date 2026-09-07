@@ -8,10 +8,11 @@
     opts: defaults,size=3G
     state: mounted
 
-# Java 21
-- name: Install Java 21
+- name: Install Java 21 and the AWS CLI
   ansible.builtin.dnf:
-    name: java-21-amazon-corretto
+    name:
+      - java-21-amazon-corretto
+      - awscli-2
     state: present
 
 - name: Add the Jenkins repository

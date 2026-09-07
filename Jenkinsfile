@@ -9,17 +9,26 @@ pipeline {
     }
 
     stages {
+        // Every address comes from SSM, so rebuilding the CloudFormation stacks
+        // with new IPs needs no edit here.
         stage('Resolve environment') {
             steps {
-                def ssm = { name ->
-                    sh(script: "aws ssm get-parameter --name ${name} --query Parameter.Value --output text", returnStdout: true).trim()
+                script {
+                    def ssm = { name ->
+                        sh(script: "aws ssm get-parameter --name ${name} --query Parameter.Value --output text", returnStdout: true).trim()
+                    }
+                    def stagingIp = ssm('/rmit/staging/PRIVATE_IP')
+
+                    env.ECR         = ssm('/rmit/ECR_REGISTRY')
+                    env.STAGING     = "ec2-user@${stagingIp}"
+                    env.STAGING_URL = "http://${stagingIp}:8081"
+                    env.SWARM_MGR   = "ec2-user@" + ssm('/rmit/prod/SWARM_MGR_IP')
+                    env.PROD_URL    = "http://" + ssm('/rmit/prod/ALB_DNS')
+
+                    env.AWS_REGION  = env.ECR.split('\\.')[3]
+
+                    echo "staging=${env.STAGING_URL} prod=${env.PROD_URL} registry=${env.ECR}"
                 }
-                env.ECR = ssm('/rmit/ECR_REGISTRY')
-                env.STAGING     = "ec2-user@" + ssm('/rmit/staging/PRIVATE_IP')
-                env.STAGING_URL = "http://" + ssm('/rmit/staging/PRIVATE_IP') + ":8081"
-                env.SWARM_MGR   = "ec2-user@" + ssm('/rmit/prod/SWARM_MGR_IP')
-                env.PROD_URL    = "http://" + ssm('/rmit/prod/ALB_DNS')
-                echo "staging=${env.STAGING_URL} prod=${env.PROD_URL}"
             }
         }
         stage('Checkout') {
@@ -90,8 +99,8 @@ pipeline {
         //         usernameVariable: 'U', passwordVariable: 'P')]) {
         //     sh 'echo "$P" | docker login -u "$U" --password-stdin'
         //   }
-        // Whichever you pick, the three image: lines in docker-compose.prod.yml
-        // and the login block in deploy.sh must match it.
+        // Whichever you pick, ${ECR} must match it - the three image: lines in
+        // docker-compose.prod.yml and swarm/stack.yml all read that one variable.
         // REPLACE: prefix ${ECR} with ${DOCKER_NS} that you filled in above if you prefer Docker Hub (PM prefers ECR ^^)
         stage('Push Images') {
             steps {
@@ -108,14 +117,34 @@ pipeline {
             }
         }
 
+        // The app staging host holds no checkout and no GitHub credential. Compose reads
+        // exactly two files from disk, and both are copied here from this
+        // workspace, which is already standing at ${env.SHA}. compose.env sits
+        // in ~/deploy already, written by Ansible from SSM, and is never
+        // overwritten, Jenkins therefore handles no secret at all.
+        //
+        // No docker login: the docker role installed amazon-ecr-credential-helper,
+        // so pull authenticates from the instance profile every time.
+        // Still follow the structure after copying the files
+        // NOTE: BY THIS, WE DO NOT NEED DEPLOY.SH ANYMORE, WE CAN JUST USE JENKINSFILE TO DEPLOY STAGING AND PROD
         stage('Deploy Staging') {
             steps {
                 sshagent(['app-host-key']) {
                     sh """
+                        scp -o StrictHostKeyChecking=no docker-compose.prod.yml ${STAGING}:~/deploy/
+                        scp -o StrictHostKeyChecking=no docker/client-nginx-compose.conf ${STAGING}:~/deploy/docker/
+
                         ssh -o StrictHostKeyChecking=no ${STAGING} \
-                            'GIT_SHA=${env.SHA} ~/deploy.sh'
+                          'cd ~/deploy \
+                           && export ECR=${env.ECR} IMAGE_TAG=${env.SHA} \
+                           && docker compose --env-file compose.env -f docker-compose.prod.yml pull \
+                           && docker compose --env-file compose.env -f docker-compose.prod.yml up -d --remove-orphans \
+                           && docker image prune -f'
                     """
                 }
+                // Printed so a rollback by hand needs no lookup: ssh in, cd ~/deploy,
+                // and rerun the same two exports with an older IMAGE_TAG.
+                echo "Deployed ${env.SHA} to ${env.STAGING_URL} from ${env.ECR}"
             }
         }
 

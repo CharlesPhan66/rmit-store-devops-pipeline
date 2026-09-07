@@ -1,12 +1,16 @@
 ---
-- name: Ensure the repo is checked out
-  ansible.builtin.git:
-    repo: "{{ repo_url }}"
-    dest: "{{ repo_dir }}"
-    update: false
-    accept_hostkey: true
-  become_user: ec2-user
-  register: repo_clone
+# The app host never clones the repository. Jenkins already holds it at the
+# right commit and copies across the only two files Compose reads from disk,
+# so this role's whole job is the part Jenkins must not do: turning SSM
+# secrets into compose.env.
+
+- name: Create the deploy directory
+  ansible.builtin.file:
+    path: "{{ deploy_dir }}/docker"
+    state: directory
+    owner: ec2-user
+    group: ec2-user
+    mode: '0755'
 
 - name: Read configuration from SSM Parameter Store
   ansible.builtin.set_fact:
@@ -15,19 +19,14 @@
     postgres_password: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/POSTGRES_PASSWORD', decrypt=true) }}"
   no_log: true
 
-- name: Render compose.env beside docker-compose.prod.yml
+- name: Render compose.env
   ansible.builtin.template:
     src: compose.env.j2
-    dest: "{{ repo_dir }}/compose.env"
+    dest: "{{ deploy_dir }}/compose.env"
     owner: ec2-user
     group: ec2-user
     mode: '0600'
   no_log: true
 
-- name: Render deploy.sh outside the checkout
-  ansible.builtin.template:
-    src: deploy.sh.j2
-    dest: /home/ec2-user/deploy.sh
-    owner: ec2-user
-    group: ec2-user
-    mode: '0755'
+# Theres no need to render deploy.sh anymore
+# Jenkins will scp directly to staging host and run ssh -o to run command

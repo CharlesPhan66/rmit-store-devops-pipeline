@@ -14,6 +14,25 @@
     enabled: true
     state: started
 
+
+- name: Create the Docker CLI plugin directory
+  ansible.builtin.file:
+    path: /usr/libexec/docker/cli-plugins
+    state: directory
+    mode: '0755'
+
+- name: Look for the Compose plugin
+  ansible.builtin.stat:
+    path: /usr/libexec/docker/cli-plugins/docker-compose
+  register: compose_plugin
+
+- name: Install the Compose plugin
+  ansible.builtin.get_url:
+    url: "https://github.com/docker/compose/releases/download/v{{ docker_compose_version }}/docker-compose-linux-{{ ansible_architecture }}"
+    dest: /usr/libexec/docker/cli-plugins/docker-compose
+    mode: '0755'
+  when: not compose_plugin.stat.exists
+
 - name: Add ec2-user to the docker group
   ansible.builtin.user:
     name: ec2-user
@@ -22,13 +41,23 @@
 
 - name: Keep the hostname across reboots
   ansible.builtin.lineinfile:
-    name: /etc/cloud/cloud.cfg
-    line: "{{ preserve_hostname: true }}"
+    path: /etc/cloud/cloud.cfg
+    line: "preserve_hostname: true"
     create: true
 
 - name: Set the hostname for the Name tag of the instance
   ansible.builtin.hostname:
     name: "{{ inventory_hostname }}"
+
+# copy does not create parent directories, and a fresh AL2023 box has no
+# ~/.docker until something writes to it.
+- name: Create ec2-user's Docker config directory
+  ansible.builtin.file:
+    path: /home/ec2-user/.docker
+    state: directory
+    owner: ec2-user
+    group: ec2-user
+    mode: '0700'
 
 - name: Point Docker at the ECR credential helper
   ansible.builtin.copy:

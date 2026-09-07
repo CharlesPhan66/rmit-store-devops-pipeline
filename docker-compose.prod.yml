@@ -17,8 +17,8 @@
 #               and Compose re-parses the file on each invocation
 #   -f          because without it Compose reads docker-compose.yml, the dev stack
 #
-# ${ECR} must be in the environment too - see the Registry note below. deploy.sh
-# exports it; by hand:
+# ${ECR} must be in the environment too - see the Registry note below. Jenkins
+# exports it over SSH; by hand:
 #
 #   export ECR="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com"
 #
@@ -91,22 +91,23 @@ services:
   # pull from an account they cannot see and fail with `no basic auth
   # credentials`.
   #
-  # Both variables are exported by deploy.sh (see deploy.sh.example):
-  #   ECR        <account-id>.dkr.ecr.<region>.amazonaws.com, derived on the host
-  #              from `aws sts get-caller-identity` - the same value
-  #              cloudformation/data.yml publishes at /rmit/ECR_REGISTRY and the
-  #              same variable name swarm/stack.yml uses, so Compose and Swarm
-  #              read one registry setting, not two.
+  # Both variables are exported by the Deploy Staging stage in the Jenkinsfile:
+  #   ECR        <account-id>.dkr.ecr.<region>.amazonaws.com, read from
+  #              /rmit/ECR_REGISTRY, which cloudformation/data.yml publishes.
+  #              swarm/stack.yml reads the same variable name, so Compose and
+  #              Swarm share one registry setting rather than two.
   #   IMAGE_TAG  the commit Jenkins is deploying.
+  #
+  # No `docker login` anywhere: the docker role installs
+  # amazon-ecr-credential-helper, so pull authenticates from the instance
+  # profile on every call and no 12h token can go stale.
   #
   # `migrate` and `api` must always be the same image: migrate runs that
   # backend's own manage.py, so a mismatch migrates with one release's schema and
   # then serves another release's code.
   #
-  # To go back to Docker Hub, change nothing here - export ECR=<dockerhub-user>
-  # in deploy.sh instead, since <dockerhub-user>/rmit-api:<tag> has the same
-  # shape. A public Docker Hub repo needs no login to pull; ECR always does, and
-  # its token expires after 12h.
+  # To go back to Docker Hub, change nothing here, export ECR=<dockerhub-user>
+  # instead, since <dockerhub-user>/rmit-api:<tag> has the same shape.
   #
   # ${IMAGE_TAG:-latest} keeps a hand-typed `docker compose up` working when the
   # variable is unset, which is useful while debugging.

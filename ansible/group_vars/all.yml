@@ -2,3 +2,5 @@
 # Applies to every host. Keep this file for values that are genuinely global —
 # anything environment-specific belongs in a tag_Role_* file instead.
 aws_region: us-east-1
+
+docker_compose_version: "5.5.1"

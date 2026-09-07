@@ -18,7 +18,7 @@
   no_log: true
 
 - name: Join the workers
-ansible.builtin.command: >
+  ansible.builtin.command: >
     docker swarm join --token {{ join_token.stdout }} 
     {{ hostvars[groups['tag_Role_swarm_manager'][0]].ansible_host }}:2377
   register: swarm_join
