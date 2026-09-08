@@ -1,13 +1,13 @@
-# G3 — Ansible and Docker Swarm
+# Ansible Configuration and Docker Swarm
 
 ## Scope
 
-G3 owns two assignment requirements:
+This directory implements two assignment requirements:
 
 - Requirement 7: configure EC2 hosts with idempotent Ansible roles.
 - Requirement 9: create Docker Swarm, run at least two API replicas, and prove rolling update and rollback.
 
-G3 does not build images or configure Jenkins. G2 supplies the deployment contract; G5 runs CI/CD.
+The Ansible work does not build images or configure Jenkins. G2 supplies the deployment contract; G5 runs CI/CD.
 
 ```text
 G1 infrastructure -> Ansible inventory -> configure EC2 -> Docker Swarm
@@ -45,7 +45,7 @@ G1 must provide:
 G2 must provide:
 
 - Immutable API and client image names/tags.
-- The Compose/runtime contract that G3 will adapt into `swarm/stack.yml`.
+- The Compose/runtime contract that the Ansible deployment adapts into `swarm/stack.yml`.
 - Health endpoints and the one-shot migration command.
 
 ## Layout
@@ -123,7 +123,7 @@ ansible-playbook deploy.yml -e image_tag=<GIT_SHA>
 
 `deploy.yml` validates the images, runs `python manage.py migrate` in one
 temporary service, deploys the stack, waits for every replica, and checks
-`/readyz/` and `/api/version/`. G3 then proves:
+`/readyz/` and `/api/version/`. The deployment evidence then proves:
 
 - Every expected node is `Ready` in `docker node ls`.
 - The API service has at least two replicas.
