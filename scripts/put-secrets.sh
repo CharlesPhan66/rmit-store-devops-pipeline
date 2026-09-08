@@ -1,19 +1,15 @@
 #!/usr/bin/env bash
 #
-# Put the seven SecureString parameters the pipeline needs into SSM.
+# This file is to prompt you for secrets to be stored in SSM Parameter Store
+# As in production, these secrets are up to you to manage, so we do not take them as command line arguments and assume that as "Automation"
 #
 #   ./scripts/put-secrets.sh
-#
-# CloudFormation cannot do this: AWS::SSM::Parameter accepts String and
-# StringList only, never SecureString. So these seven live outside the
-# templates, and this script is the whole of that manual step.
 #
 # Run it once, after the rmit-data stack exists. Re-running is safe: the two
 # database parameters are overwritten, and SECRET_KEY is only ever created.
 #
-# For automation, export RDS_PASS, ADMIN_PASS and PROD_ADMIN_PASS beforehand
-# prompted. Prefer the prompts interactively - a typed password ends up in
-# ~/.zsh_history and in the process table.
+# For automation, export RDS_PASS, ADMIN_PASS, PROD_ADMIN_PASS, EMAIL_ADDRESS
+# and EMAIL_PASSWORD beforehand
 
 set -euo pipefail
 
@@ -24,10 +20,15 @@ STAGING_DB_NAME=rmit_staging
 
 die() { printf '\nerror: %s\n' "$1" >&2; exit 1; }
 
-# --- Preconditions -----------------------------------------------------------
+# Preconditions
 
+# Check the aws CLI is installed so it can be used to verify credentials and write the secrets
+# Otherwise, the script will fail with a less helpful error message when it tries to use the aws CLI
+# Please use cloudshell instead if you do not have the aws CLI installed locally, or install them (recommended)
+# Figure out how to install the aws cli and have aws session of learner lab on your local machine if you want to run this script locally
 command -v aws >/dev/null || die "the aws CLI is not installed"
 
+# Check if the session is valid
 aws sts get-caller-identity >/dev/null 2>&1 \
   || die "no valid AWS credentials. Learner Lab sessions expire after ~4h;
        refresh them from AWS Details -> AWS CLI -> Show."
@@ -42,11 +43,9 @@ RDS=$(aws ssm get-parameter --name "$RDS_ENDPOINT_PARAM" \
 echo "RDS endpoint: $RDS"
 echo
 
-# --- Passwords ---------------------------------------------------------------
+# Passwords
 
-# django-environ splits DATABASE_URL on these characters, so a password
-# containing one of them makes Django connect to a host name that is really a
-# fragment of the password. Refuse rather than produce a URL that parses wrong.
+# Check if the password is valid (Do not use @ : / or # in the password, as django-environ splits the URL on those)
 reject_url_unsafe() {
   case "$2" in
     *[@:/#]*) die "$1 must not contain @ : / or # - django-environ splits the
@@ -55,14 +54,6 @@ reject_url_unsafe() {
   [ -n "$2" ] || die "$1 must not be empty"
 }
 
-# The RDS master password: exactly the value passed as DbPassword when
-# cloudformation/data.yml was deployed. NoEcho hides it from describe-stacks,
-# so there is no way to read it back - a mismatch here surfaces later as
-# `password authentication failed for user "rmit"` in the deployment logs.
-#
-# One password, because both environments are DATABASES on one instance,
-# reached with the same master account. What separates them is the database
-# name, not the credential.
 if [ -z "${RDS_PASS:-}" ]; then
   read -rsp 'RDS master password (the DbPassword given to data.yml): ' RDS_PASS
   echo
@@ -130,6 +121,30 @@ aws ssm put-parameter --name /rmit/prod/ADMIN_PASSWORD \
   --type SecureString --overwrite \
   --value "$PROD_ADMIN_PASS" >/dev/null
 
+# One Gmail account handles app emails and Jenkins alerts.
+# The address is public; only the App Password is stored as SecureString (generated once at https://myaccount.google.com/apppasswords (2-Step Verification required first)
+# Both services share the same Gmail sending quota.
+if [ -z "${EMAIL_ADDRESS:-}" ]; then
+  read -rp 'Gmail address for real email delivery (same one used for Jenkins alerts): ' EMAIL_ADDRESS
+fi
+[ -n "$EMAIL_ADDRESS" ] || die "The email address must not be empty"
+
+if [ -z "${EMAIL_PASSWORD:-}" ]; then
+  read -rsp 'Gmail App Password (16 characters, no spaces): ' EMAIL_PASSWORD
+  echo
+fi
+[ -n "$EMAIL_PASSWORD" ] || die "The email app password must not be empty"
+
+echo "==> /rmit/EMAIL_ADDRESS"
+aws ssm put-parameter --name /rmit/EMAIL_ADDRESS \
+  --type String --overwrite \
+  --value "$EMAIL_ADDRESS" >/dev/null
+
+echo "==> /rmit/EMAIL_PASSWORD"
+aws ssm put-parameter --name /rmit/EMAIL_PASSWORD \
+  --type SecureString --overwrite \
+  --value "$EMAIL_PASSWORD" >/dev/null
+
 # --- SECRET_KEY, one per environment -----------------------------------------
 # Created, never overwritten. Rotating this signing key invalidates every
 # issued JWT and every outstanding password-reset link, so a careless re-run of
@@ -147,9 +162,9 @@ for ENV in staging prod; do
   fi
 done
 
-unset RDS_PASS ADMIN_PASS PROD_ADMIN_PASS
+unset RDS_PASS ADMIN_PASS PROD_ADMIN_PASS EMAIL_PASSWORD
 
-# --- Verify ------------------------------------------------------------------
+# Verify
 
 echo
 echo "SSM now holds:"
@@ -159,10 +174,11 @@ aws ssm get-parameters-by-path --path /rmit --recursive \
 COUNT=$(aws ssm get-parameters-by-path --path /rmit --recursive \
           --query 'length(Parameters)' --output text)
 
-# 10 String from CloudFormation + the 7 written here. JENKINS_PUBKEY makes 18,
-# but Ansible has not run yet at this point in the runbook.
-if [ "$COUNT" -lt 17 ]; then
-  die "expected at least 17 parameters, found $COUNT. A CloudFormation stack is
+# 10 String from CloudFormation + the 8 written here (7 SecureString + 1
+# String). JENKINS_PUBKEY makes 19, but Ansible has not run yet at this point
+# in the runbook.
+if [ "$COUNT" -lt 18 ]; then
+  die "expected at least 18 parameters, found $COUNT. A CloudFormation stack is
        probably missing - check that all four deployed."
 fi
 

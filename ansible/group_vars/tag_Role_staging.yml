@@ -1,42 +1,32 @@
 ---
-# Variables for the staging host. The group name comes from the EC2 tag
-# Role=staging, so renaming the machine itself changes nothing here.
-# Nothing is typed by hand here: every value is derived from the inventory
-# or read from SSM, so this file survives the infrastructure being rebuilt with
-# different addresses.
+# Variables for the staging host (Role=staging).
+# Values come from inventory or SSM, so they survive instance rebuilds.
+
 
 ssm_prefix: /rmit/staging
 
-# Where Jenkins drops docker-compose.prod.yml and the nginx conf, and where this
-# role writes compose.env beside them. No git checkout lives here: the host
-# holds no GitHub credential at all.
+# Jenkins copies Compose files here; Ansible writes compose.env.
 deploy_dir: /home/ec2-user/deploy
 
-# seed_demo looks up its administrator by this address (its own default), so
-# create_admin has to make the account under exactly this email or seed_demo
-# will demand a password it has no way to receive.
+# Required by seed_demo and create_admin.
 admin_email: admin@rmit.edu.au
 
-# Staging's own database on the shared RDS instance. The master user is the one
-# cloudformation/data.yml created; it owns both databases.
+# Staging database on the shared RDS instance.
 staging_db: rmit_staging
 db_master_user: rmit
 
-# Private IP is used by Jenkins; public IP is used by browsers.
-# Both must be allowed because production validates the Host header.
-# 127.0.0.1 is required for the API container health check.
+# Allow Jenkins, browsers, and local container health checks.
 allowed_hosts: "{{ ansible_host }},{{ public_ip_address | default(ansible_host) }},127.0.0.1,localhost"
 
-# The address a person clicks, so password-reset links have to use the public
-# one. A Learner Lab session ending reassigns it, which is why re-running the
-# playbook is part of coming back to the machines.
+# Public URL used by browsers and password-reset links.
 client_url: "http://{{ public_ip_address | default(ansible_host) }}:8081"
 
-# Django admin form posts are checked against this. Both origins, because the
-# admin is reachable over either address.
+# Allow Django admin requests from both staging addresses.
 csrf_trusted_origins: "http://{{ public_ip_address | default(ansible_host) }}:8081,http://{{ ansible_host }}:8081"
 
-# Staging has a bucket of its own. Sharing production's would let seed_demo
-# overwrite the very objects production's rows point at - the app hardcodes the
-# "media" prefix, so a bucket is the smallest unit we can separate.
+# Separate staging bucket prevents seed data from affecting production media.
 media_bucket: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/MEDIA_BUCKET', region=aws_region) }}"
+
+# Shared sender address for app emails and Jenkins alerts.
+# The address is public; its App Password is stored separately as a secret.
+email_address: "{{ lookup('amazon.aws.aws_ssm', '/rmit/EMAIL_ADDRESS', region=aws_region) }}"

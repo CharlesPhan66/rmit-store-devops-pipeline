@@ -6,27 +6,21 @@ services:
     image: ${ECR}/rmit-api:${GIT_SHA}
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.prod
-      # Every value below is interpolated from the environment of the
-      # `docker stack deploy` command, which Jenkins fills from SSM. Nothing
-      # here names an account, a bucket or a load balancer, so redeploying the
-      # CloudFormation stacks needs no edit to this file.
-      #
-      # ALLOWED_HOSTS must contain the ALB's DNS name: prod settings reject any
-      # other Host header with 400, and the browser reaches the API through the
-      # load balancer. 127.0.0.1 is for the container's own health check.
       ALLOWED_HOSTS: "${ALB_DNS},127.0.0.1"
       USE_S3: "True"
       AWS_STORAGE_BUCKET_NAME: "${MEDIA_BUCKET}"
       AWS_S3_REGION_NAME: "${AWS_REGION}"
-      # IN THE ORIGINAL ENV FILE, GIT_COMMIT IS SUPPOSED TO BE SET TO THE GIT SHA OF THE COMMIT THAT BUILT THE IMAGE
-      # JENKINS WILL SET THIS ENV VAR AUTOMATICALLY WHEN IT BUILDS THE IMAGE, SO YOU CAN LEAVE IT AS IS
       GIT_COMMIT: ${GIT_SHA}
+      EMAIL_BACKEND: django.core.mail.backends.smtp.EmailBackend
+      EMAIL_HOST: smtp.gmail.com
+      EMAIL_PORT: "587"
+      EMAIL_USE_TLS: "True"
+      EMAIL_HOST_USER: "${EMAIL_ADDRESS}"
+      DEFAULT_FROM_EMAIL: "RMIT Store <${EMAIL_ADDRESS}>"
     secrets:
-      # SECRET_KEY & DATABASE_URL ARE REQUIRED IN THE DJANGO ENV
-      # BUT USING SWARM CANNOT SET --env-file as COMPOSE DOES
-      # So we use secrets (Make sure it's created in the swarm manager first, run docker secret ls to check)
       - SECRET_KEY
       - DATABASE_URL
+      - EMAIL_HOST_PASSWORD
     networks: [rmit]
     deploy:
       replicas: 3  # Tính luôn manager node
@@ -67,10 +61,12 @@ services:
         order: start-first
 
 secrets:
-  # External: Swarm doesn't create it in run-time, it must be created in the swarm manager first by you
+  # External: Swarm doesn't create it in run-time, it must be created in the swarm manager first by ansible task. The secret's value is read from SSM and passed to the swarm manager.
   SECRET_KEY:
     external: true
   DATABASE_URL:
+    external: true
+  EMAIL_HOST_PASSWORD:
     external: true
 
 # This is the same as bind mounting a file in docker-compose

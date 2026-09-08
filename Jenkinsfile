@@ -28,6 +28,8 @@ pipeline {
                     env.MEDIA_BUCKET = ssm('/rmit/prod/MEDIA_BUCKET')
                     env.PROD_URL     = "http://${env.ALB_DNS}"
 
+                    env.EMAIL_ADDRESS = ssm('/rmit/EMAIL_ADDRESS')
+
                     env.AWS_REGION  = env.ECR.split('\\.')[3]
 
                     echo "staging=${env.STAGING_URL} prod=${env.PROD_URL} registry=${env.ECR}"
@@ -219,7 +221,7 @@ pipeline {
                         cd ~/deploy &&
                         ECR=${ECR} GIT_SHA=${env.SHA} \
                         ALB_DNS=${env.ALB_DNS} MEDIA_BUCKET=${env.MEDIA_BUCKET} \
-                        AWS_REGION=${env.AWS_REGION} \
+                        AWS_REGION=${env.AWS_REGION} EMAIL_ADDRESS=${env.EMAIL_ADDRESS} \
                         docker stack deploy \
                             -c swarm/stack.yml --with-registry-auth rmit
                     '

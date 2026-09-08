@@ -1,9 +1,6 @@
 ---
-# The app host never clones the repository. Jenkins already holds it at the
-# right commit and copies across the only two files Compose reads from disk,
-# so this role's whole job is the part Jenkins must not do: turning SSM
-# secrets into compose.env.
-
+# The app host receives only the files needed by Compose.
+# Ansible reads secrets from SSM and generates compose.env.
 - name: Create the deploy directory
   ansible.builtin.file:
     path: "{{ deploy_dir }}/docker"
@@ -17,20 +14,13 @@
     secret_key: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/SECRET_KEY', decrypt=true, region=aws_region) }}"
     database_url: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/DATABASE_URL', decrypt=true, region=aws_region) }}"
     admin_password: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/ADMIN_PASSWORD', decrypt=true, region=aws_region) }}"
-    # The RDS master credentials, needed only to CREATE DATABASE below. RDS
-    # sits in a private subnet with no route out, so CloudFormation can never
-    # reach it to run SQL - this host can, because DbSg admits StagingSg.
+    email_password: "{{ lookup('amazon.aws.aws_ssm', '/rmit/EMAIL_PASSWORD', decrypt=true, region=aws_region) }}"
     rds_endpoint: "{{ lookup('amazon.aws.aws_ssm', '/rmit/RDS_ENDPOINT', region=aws_region) }}"
     rds_master_password: "{{ lookup('amazon.aws.aws_ssm', '/rmit/RDS_MASTER_PASSWORD', decrypt=true, region=aws_region) }}"
   no_log: true
 
-# psql connects to the `postgres` maintenance database, because you cannot
-# create a database from inside the one you are creating. The master account
-# has CREATEDB, which is one of the few things RDS does grant it.
-#
-# PGPASSWORD is passed by NAME, not by value: `docker run -e PGPASSWORD` with
-# no `=` forwards whatever the docker client already has in its environment, so
-# the password never appears in argv and never reaches the host's process table.
+# Query the postgres maintenance database because a database cannot create itself.
+# Pass PGPASSWORD through the environment to keep it out of argv and process listings.
 - name: Look for the staging database on RDS
   ansible.builtin.command:
     argv:
@@ -55,9 +45,7 @@
   changed_when: false
   no_log: true
 
-# CREATE DATABASE cannot run inside a transaction, so it is its own statement
-# and guarded by the query above rather than by IF NOT EXISTS, which Postgres
-# does not support here.
+# CREATE DATABASE is run separately because it cannot run inside a transaction.
 - name: Create the staging database on RDS
   ansible.builtin.command:
     argv:
@@ -91,4 +79,4 @@
   no_log: true
 
 # Theres no need to render deploy.sh anymore
-# Jenkins will scp directly to staging host and run ssh -o to run command
+# Jenkins will scp the required files directly to staging host and run ssh -o to run command
