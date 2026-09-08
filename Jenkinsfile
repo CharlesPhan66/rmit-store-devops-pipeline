@@ -88,23 +88,10 @@ pipeline {
             }
         }
 
-        // Pushes to Amazon ECR. Note what is absent: no withCredentials, no static
-        // token. `aws` gets a 12-hour token from this instance's profile, which is
-        // the reason for using ECR over Docker Hub - every other part of this
-        // project already dropped its static keys.
-        //
-        // Requires on the Jenkins host: the aws CLI, and an instance profile with
-        // ECR permissions (LabInstanceProfile on Learner Lab).
-        //
-        // The Docker Hub equivalent, if you ever switch back, needs the static
-        // token restored:
-        //   withCredentials([usernamePassword(credentialsId: 'dockerhub',
-        //         usernameVariable: 'U', passwordVariable: 'P')]) {
-        //     sh 'echo "$P" | docker login -u "$U" --password-stdin'
-        //   }
-        // Whichever you pick, ${ECR} must match it - the three image: lines in
-        // docker-compose.prod.yml and swarm/stack.yml all read that one variable.
-        // REPLACE: prefix ${ECR} with ${DOCKER_NS} that you filled in above if you prefer Docker Hub (PM prefers ECR ^^)
+        // Authenticate to ECR using the EC2 instance profile, avoiding static credentials.
+        // ECR must match the registry used by the Compose and Swarm image definitions.
+        // Docker Hub would require restoring Jenkins credentials and its login step.
+
         stage('Push Images') {
             steps {
                 sh """
@@ -120,29 +107,20 @@ pipeline {
             }
         }
 
-        // The app staging host holds no checkout and no GitHub credential. Compose reads
-        // exactly two files from disk, and both are copied here from this
-        // workspace, which is already standing at ${env.SHA}. compose.env sits
-        // in ~/deploy already, written by Ansible from SSM, and is never
-        // overwritten, Jenkins therefore handles no secret at all.
-        //
-        // No docker login: the docker role installed amazon-ecr-credential-helper,
-        // so pull authenticates from the instance profile every time.
-        //
-        // seed_demo runs on staging and nowhere else. It is idempotent, so
-        // every deploy re-runs it harmlessly, and the smoke test that asserts
-        // /api/products/ returns a non-empty catalogue has something to find -
-        // migrate creates the schema but leaves the database empty. It also
-        // uploads the generated product images, which is the cheapest proof
-        // that USE_S3 and the instance profile actually work.
-        //
-        // create_admin has to go first. seed_demo refuses to invent an
-        // administrator password and has no environment fallback
-        //
-        // Production deliberately has no equivalent: seeding demo data into
-        // real customer records is exactly the accident this split prevents.
-        // Still follow the structure after copying the files
-        // NOTE: BY THIS, WE DO NOT NEED DEPLOY.SH ANYMORE, WE CAN JUST USE JENKINSFILE TO DEPLOY STAGING AND PROD
+        // Deployment files and compose.env are prepared on the staging host by Ansible.
+        // Jenkins only copies the Compose files; no checkout or GitHub credentials are
+        // needed on the host. ECR pulls use the EC2 instance profile.
+
+        // Staging runs idempotent seed_demo with --demo-users to provide the catalogue
+        // and accounts required by E2E tests. Production seeds only the catalogue;
+        // credentials come from SSM through Docker secrets.
+
+        // Rationale for excluding --demo-users in production: the demo accounts are not real users, and they are not needed for the production catalogue.
+        // In production, it should be left for sellers to create their own accounts, and for buyers to create their own accounts. The demo accounts are only for testing and demonstration purposes, and should not be present in the production environment.
+
+        // create_admin must run before seed_demo. Never use --flush: repeated deploys
+        // must preserve existing data. Jenkins handles both staging and production
+        // deployment, so deploy.sh is not required.
         stage('Deploy Staging') {
             steps {
                 sh """
@@ -157,7 +135,7 @@ pipeline {
                        && docker compose --env-file compose.env -f docker-compose.prod.yml \
                             run --rm --no-deps api python manage.py create_admin \
                        && docker compose --env-file compose.env -f docker-compose.prod.yml \
-                            run --rm --no-deps api python manage.py seed_demo \
+                            run --rm --no-deps api python manage.py seed_demo --demo-users \
                        && docker image prune -f'
                 """
                 // Printed so a rollback by hand needs no lookup: ssh in, cd ~/deploy,
