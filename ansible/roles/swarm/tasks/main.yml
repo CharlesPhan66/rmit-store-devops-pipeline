@@ -1,0 +1,102 @@
+---
+- name: Read the local Docker Swarm state
+  ansible.builtin.command:
+    argv:
+      - docker
+      - info
+      - --format
+      - "{% raw %}{{.Swarm.LocalNodeState}}{% endraw %}"
+  register: local_swarm_state
+  changed_when: false
+
+- name: Initialize the production Swarm manager
+  ansible.builtin.command:
+    argv:
+      - docker
+      - swarm
+      - init
+      - --advertise-addr
+      - "{{ ansible_default_ipv4.address }}"
+  when:
+    - inventory_hostname in groups[swarm_manager_group]
+    - local_swarm_state.stdout != 'active'
+  register: swarm_manager_init
+  changed_when: swarm_manager_init.rc == 0
+
+- name: Read the worker join token from the manager
+  ansible.builtin.command:
+    argv:
+      - docker
+      - swarm
+      - join-token
+      - -q
+      - worker
+  delegate_to: "{{ groups[swarm_manager_group][0] }}"
+  run_once: true
+  register: swarm_worker_token
+  changed_when: false
+  no_log: true
+
+- name: Join production workers to the Swarm
+  ansible.builtin.command:
+    argv:
+      - docker
+      - swarm
+      - join
+      - --token
+      - "{{ swarm_worker_token.stdout }}"
+      - "{{ hostvars[groups[swarm_manager_group][0]].ansible_default_ipv4.address }}:{{ swarm_manager_port }}"
+  when:
+    - inventory_hostname in groups[swarm_worker_group]
+    - local_swarm_state.stdout != 'active'
+  register: swarm_worker_join
+  changed_when: swarm_worker_join.rc == 0
+  no_log: true
+
+- name: Verify the Swarm nodes from the manager
+  ansible.builtin.command:
+    argv:
+      - docker
+      - node
+      - ls
+      - --format
+      - "{% raw %}{{.Hostname}} {{.Status}} {{.ManagerStatus}}{% endraw %}"
+  delegate_to: "{{ groups[swarm_manager_group][0] }}"
+  run_once: true
+  register: swarm_nodes
+  changed_when: false
+
+- name: Display the Swarm membership
+  ansible.builtin.debug:
+    var: swarm_nodes.stdout_lines
+  run_once: true
+
+- name: List the secrets already stored by the Swarm
+  ansible.builtin.command:
+    argv:
+      - docker
+      - secret
+      - ls
+      - --format
+      - "{% raw %}{{.Name}}{% endraw %}"
+  register: swarm_existing_secrets
+  changed_when: false
+  when: inventory_hostname in groups[swarm_manager_group]
+
+- name: Create missing production secrets from SSM Parameter Store
+  ansible.builtin.command:
+    argv:
+      - docker
+      - secret
+      - create
+      - "{{ item.key }}"
+      - "-"
+    stdin: >-
+      {{ lookup('amazon.aws.aws_ssm', item.value,
+                region=aws_region, decrypt=true) }}
+    stdin_add_newline: false
+  loop: "{{ swarm_secret_parameters | dict2items }}"
+  when:
+    - inventory_hostname in groups[swarm_manager_group]
+    - item.key not in (swarm_existing_secrets.stdout_lines | default([]))
+  no_log: true

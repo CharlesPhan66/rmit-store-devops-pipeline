@@ -119,3 +119,6 @@ CLAUDE.MD
 plan/
 ansible/inventory/dev.ini
 ansible/inventory/swarm.ini
+
+# Generated deployment configuration contains SSM-provided secrets.
+compose.env

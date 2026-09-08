@@ -1,8 +1,0 @@
----
-# defaults file for ansible/roles/app_runtime
-# Packages required on the application hosts
-runtime_packages:
-  - git
-  - python3.11
-  - python3.11-pip
-  - postgresql16

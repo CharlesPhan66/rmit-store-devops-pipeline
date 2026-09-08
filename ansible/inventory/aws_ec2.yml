@@ -1,0 +1,36 @@
+---
+plugin: amazon.aws.aws_ec2
+
+regions:
+  - us-east-1
+
+filters:
+  instance-state-name: running
+
+hostnames:
+  - tag:Name
+  - private-ip-address
+
+compose:
+  ansible_host: private_ip_address
+
+# Prefer G1 Role tags, while also recognising the agreed EC2 Name tags.
+keyed_groups:
+  - key: tags.Role
+    prefix: tag_Role
+
+groups:
+  tag_Role_ansible: >-
+    (tags.Role | default('')) == 'ansible' or
+    (tags.Name | default('')) == 'rmit-ansible-server'
+  tag_Role_staging: >-
+    (tags.Role | default('')) == 'staging' or
+    (tags.Name | default('')) == 'rmit-staging-server'
+  tag_Role_swarm_manager: >-
+    (tags.Role | default('')) == 'swarm-manager' or
+    (tags.Name | default('')) == 'rmit-prod-manager'
+  tag_Role_swarm_worker: >-
+    (tags.Role | default('')) == 'swarm-worker' or
+    (tags.Name | default('')) in ['rmit-worker-1', 'rmit-worker-2']
+
+strict: false

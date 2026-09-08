@@ -1,0 +1,38 @@
+---
+- name: Install staging runtime packages
+  ansible.builtin.dnf:
+    name: "{{ app_runtime_packages }}"
+    state: present
+
+- name: Create the staging deployment directory
+  ansible.builtin.file:
+    path: "{{ app_deploy_dir }}/docker"
+    state: directory
+    owner: "{{ app_deploy_user }}"
+    group: "{{ app_deploy_group }}"
+    mode: "0755"
+
+- name: Read staging configuration from SSM Parameter Store
+  ansible.builtin.set_fact:
+    app_secret_key: >-
+      {{ lookup('amazon.aws.aws_ssm', app_secret_key_parameter,
+                region=aws_region, decrypt=true) }}
+    app_database_url: >-
+      {{ lookup('amazon.aws.aws_ssm', app_database_url_parameter,
+                region=aws_region, decrypt=true) }}
+    app_postgres_password: >-
+      {{ lookup('amazon.aws.aws_ssm', app_postgres_password_parameter,
+                region=aws_region, decrypt=true) }}
+    app_media_bucket: >-
+      {{ lookup('amazon.aws.aws_ssm', app_media_bucket_parameter,
+                region=aws_region) }}
+  no_log: true
+
+- name: Render the staging Compose environment file
+  ansible.builtin.template:
+    src: compose.env.j2
+    dest: "{{ app_deploy_dir }}/compose.env"
+    owner: "{{ app_deploy_user }}"
+    group: "{{ app_deploy_group }}"
+    mode: "0600"
+  no_log: true

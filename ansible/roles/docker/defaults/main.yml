@@ -1,0 +1,17 @@
+---
+docker_packages:
+  - docker
+  - git
+  - amazon-ecr-credential-helper
+docker_service_name: docker
+docker_group_name: docker
+docker_users:
+  - ec2-user
+docker_manage_hostname: true
+docker_configure_ecr_helper: true
+docker_install_compose_plugin: true
+docker_compose_version: "5.5.1"
+docker_compose_plugin_dir: /usr/local/lib/docker/cli-plugins
+docker_compose_arch: "{{ 'x86_64' if ansible_architecture == 'x86_64' else 'aarch64' }}"
+docker_compose_url: >-
+  https://github.com/docker/compose/releases/download/v{{ docker_compose_version }}/docker-compose-linux-{{ docker_compose_arch }}

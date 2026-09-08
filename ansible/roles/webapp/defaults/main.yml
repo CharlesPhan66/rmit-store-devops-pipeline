@@ -1,0 +1,29 @@
+---
+webapp_user: ec2-user
+webapp_group: ec2-user
+webapp_repo_root: /home/ec2-user/2026b-cosc2767-a2-sg-team-13
+webapp_server_dir: "{{ webapp_repo_root }}/app/server"
+webapp_client_dist_dir: "{{ webapp_repo_root }}/app/client/dist"
+webapp_virtualenv_dir: "{{ webapp_server_dir }}/.venv"
+webapp_environment_file: /home/ec2-user/deploy/rmit-api.env
+webapp_client_url: "http://{{ ansible_host }}"
+webapp_allowed_hosts: >-
+  {{ [ansible_host, inventory_hostname, ansible_default_ipv4.address,
+      '127.0.0.1', 'localhost'] | unique | join(',') }}
+
+webapp_service_name: rmit-api
+webapp_gunicorn_bind: 127.0.0.1:8000
+webapp_gunicorn_workers: 3
+
+webapp_nginx_service: nginx
+webapp_nginx_document_root: /usr/share/nginx/html
+webapp_nginx_config: /etc/nginx/default.d/rmit-store.conf
+
+# Set this to false when only the API/reverse-proxy evidence is required.
+webapp_publish_client: true
+
+webapp_packages:
+  - nginx
+  - python3.11
+  - python3.11-pip
+  - postgresql16

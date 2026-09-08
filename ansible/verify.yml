@@ -1,0 +1,73 @@
+---
+- name: Verify Docker on every container host
+  hosts: tag_Role_staging:tag_Role_swarm_manager:tag_Role_swarm_worker
+  become: true
+  tasks:
+    - name: Collect service facts
+      ansible.builtin.service_facts:
+
+    - name: Require Docker to be running
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['docker.service'].state == 'running'
+        fail_msg: Docker is not running on {{ inventory_hostname }}
+
+- name: Verify the staging deployment configuration
+  hosts: tag_Role_staging
+  become: true
+  tasks:
+    - name: Inspect generated deployment files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ app_deploy_dir }}/compose.env"
+        - "{{ app_deploy_dir }}/docker"
+      register: app_deployment_files
+
+    - name: Require generated deployment files
+      ansible.builtin.assert:
+        that:
+          - app_deployment_files.results | map(attribute='stat.exists') | min
+
+- name: Verify Docker Swarm membership
+  hosts: tag_Role_swarm_manager
+  become: true
+  tasks:
+    - name: Read Swarm node status
+      ansible.builtin.command:
+        argv:
+          - docker
+          - node
+          - ls
+          - --format
+          - "{% raw %}{{.Hostname}} {{.Status}}{% endraw %}"
+      register: swarm_node_status
+      changed_when: false
+
+    - name: Display Swarm nodes
+      ansible.builtin.debug:
+        var: swarm_node_status.stdout_lines
+
+    - name: Require the manager and every configured worker to be Ready
+      ansible.builtin.assert:
+        that:
+          - swarm_node_status.stdout_lines | length == 1 + (groups['tag_Role_swarm_worker'] | length)
+          - swarm_node_status.stdout_lines | reject('search', ' Ready$') | list | length == 0
+        fail_msg: One or more expected Swarm nodes are missing or not Ready.
+
+    - name: Read the production Swarm secret names
+      ansible.builtin.command:
+        argv:
+          - docker
+          - secret
+          - ls
+          - --format
+          - "{% raw %}{{.Name}}{% endraw %}"
+      register: deployed_swarm_secrets
+      changed_when: false
+
+    - name: Require every configured production secret
+      ansible.builtin.assert:
+        that:
+          - (swarm_secret_parameters.keys() | difference(deployed_swarm_secrets.stdout_lines)) | length == 0
+        fail_msg: One or more required production Swarm secrets are missing.

@@ -1,0 +1,6 @@
+---
+- name: Configure the single-host Plan B web application
+  hosts: tag_Role_staging
+  become: true
+  roles:
+    - webapp

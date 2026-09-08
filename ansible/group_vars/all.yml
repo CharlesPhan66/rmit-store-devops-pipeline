@@ -1,0 +1,19 @@
+---
+aws_region: us-east-1
+
+docker_compose_version: "5.5.1"
+
+docker_packages:
+  - docker
+  - git
+  - amazon-ecr-credential-helper
+docker_service_name: docker
+docker_group_name: docker
+docker_users:
+  - ec2-user
+docker_manage_hostname: true
+docker_configure_ecr_helper: true
+
+swarm_manager_group: tag_Role_swarm_manager
+swarm_worker_group: tag_Role_swarm_worker
+swarm_manager_port: 2377

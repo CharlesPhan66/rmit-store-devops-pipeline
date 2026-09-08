@@ -1,3 +1,0 @@
----
-swarm_manager_advertise_addr: "{{ ansible_default_ipv4.address }}"
-swarm_manager_port: 2377

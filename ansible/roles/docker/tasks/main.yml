@@ -1,0 +1,73 @@
+---
+- name: Install Docker and supporting packages
+  ansible.builtin.dnf:
+    name: "{{ docker_packages }}"
+    state: present
+
+- name: Enable and start Docker
+  ansible.builtin.systemd:
+    name: "{{ docker_service_name }}"
+    enabled: true
+    state: started
+
+- name: Add deployment users to the Docker group
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: "{{ docker_group_name }}"
+    append: true
+  loop: "{{ docker_users }}"
+
+- name: Preserve the configured hostname after reboot
+  ansible.builtin.lineinfile:
+    path: /etc/cloud/cloud.cfg
+    regexp: '^preserve_hostname:'
+    line: 'preserve_hostname: true'
+    create: true
+    mode: "0644"
+  when: docker_manage_hostname | bool
+
+- name: Set the hostname from the EC2 Name tag
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+  when: docker_manage_hostname | bool
+
+- name: Create Docker configuration directories
+  ansible.builtin.file:
+    path: "/home/{{ item }}/.docker"
+    state: directory
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0700"
+  loop: "{{ docker_users }}"
+  when: docker_configure_ecr_helper | bool
+
+- name: Configure the Amazon ECR credential helper
+  ansible.builtin.copy:
+    dest: "/home/{{ item }}/.docker/config.json"
+    content: |
+      {
+        "credsStore": "ecr-login"
+      }
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: "0600"
+  loop: "{{ docker_users }}"
+  when: docker_configure_ecr_helper | bool
+
+- name: Create the Docker CLI plugin directory
+  ansible.builtin.file:
+    path: "{{ docker_compose_plugin_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: docker_install_compose_plugin | bool
+
+- name: Install the Docker Compose CLI plugin
+  ansible.builtin.get_url:
+    url: "{{ docker_compose_url }}"
+    dest: "{{ docker_compose_plugin_dir }}/docker-compose"
+    owner: root
+    group: root
+    mode: "0755"
+  when: docker_install_compose_plugin | bool

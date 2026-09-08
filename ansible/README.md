@@ -1,150 +1,149 @@
-# G3 Ansible and Docker Swarm
+# G3 — Ansible and Docker Swarm
 
-## Purpose
+## Scope
 
-This directory contains G3 configuration-management and orchestration work.
-Ansible connects to EC2 over SSH and makes every target match the configuration
-stored in this repository.
+G3 owns two assignment requirements:
 
-## Status
+- Requirement 7: configure EC2 hosts with idempotent Ansible roles.
+- Requirement 9: create Docker Swarm, run at least two API replicas, and prove rolling update and rollback.
 
-Completed on a personal Amazon Linux 2023 EC2 instance:
-- Safe inventory example and connectivity preflight.
-- Reusable roles for Docker, application runtime and Nginx.
-- Docker and runtime idempotency: the second run reported `changed=0`.
-- Single-node Swarm rehearsal with a public Nginx image.
-
-Prepared but not production-tested:
-- Manager/worker inventory and idempotent Swarm join workflow.
-- Two-replica rehearsal stack with rolling-update and rollback policies.
-- Nginx reverse proxy for Django on port `8000`.
-
-Production integration still needs the G1 infrastructure and G2 images/runtime
-contract. The personal single-node rehearsal is not production evidence.
-
-## Requirements
-
-- Python 3 and Ansible Core on the control machine.
-- Amazon Linux 2023 targets, the SSH key and SSH access from the controller.
-- Private network access between production Swarm nodes.
-
-```bash
-source <PATH_TO_ANSIBLE_VENV>/bin/activate
-ansible --version
-```
-
-## Personal development inventory
-
-```bash
-cp ansible/inventory/dev.example.ini ansible/inventory/dev.ini
-```
-
-Replace the documentation address in `dev.ini` with the EC2 public IP or DNS.
-The real `dev.ini` is ignored by Git.
-
-```ini
-[g3_targets]
-g3_target ansible_host=<EC2_ADDRESS> ansible_user=ec2-user ansible_python_interpreter=/usr/bin/python3
-```
-
-## Run Requirement 7 baseline
-
-Use the same command pattern for every playbook:
-
-```bash
-ansible-playbook -i ansible/inventory/dev.ini \
-  ansible/playbooks/<PLAYBOOK>.yml \
-  --private-key <PATH_TO_PEM_KEY>
-```
-
-| Playbook | Purpose |
-| --- | --- |
-| `preflight.yml` | Test SSH and display target facts |
-| `docker.yml` | Install, start and enable Docker |
-| `runtime.yml` | Install Git, Python, pip and PostgreSQL client |
-| `nginx.yml` | Install Nginx and its Django proxy configuration |
-| `site.yml` | Apply Docker, runtime and Nginx together |
-| `verify.yml` | Verify services, runtimes, Nginx and HTTP |
-
-Run the combined configuration with `<PLAYBOOK>` set to `site`. The Nginx root
-page is a standalone rehearsal check. API proxy routes may return `502` until G2
-provides the Django service on port `8000`.
-
-The proxy preserves the original host with `proxy_set_header Host $host`, which
-prevents Django from generating URLs for the wrong host.
-
-## Idempotency
-
-Run `site.yml` twice against the same target. The second recap should contain:
+G3 does not build images or configure Jenkins. G2 supplies the deployment contract; G5 runs CI/CD.
 
 ```text
-changed=0
-unreachable=0
-failed=0
+G1 infrastructure -> Ansible inventory -> configure EC2 -> Docker Swarm
+G2 images + stack.yml ------------------------------------^        |
+G5 Jenkins --------------------------------------------------------+-> deploy
 ```
 
-The first run installs missing configuration; the second changes nothing because
-the target already matches the declared state.
+## What is implemented
 
-## Prepare a production-like Swarm
+- Dynamic EC2 inventory based on G1 `Role` or `Name` tags.
+- Preflight validation and SSH connectivity checks.
+- Reusable Docker installation and configuration role.
+- Staging runtime role for Python 3.11, pip and PostgreSQL client.
+- Staging environment file rendered from SSM Parameter Store.
+- Optional Plan B role for Nginx, Gunicorn, systemd and `collectstatic`.
+- Automatic Swarm manager initialization and worker joining.
+- Swarm secrets created from SSM without committing secret values.
+- Verification playbook for Docker, staging files, nodes and secret names.
 
-```bash
-cp ansible/inventory/swarm.example.ini ansible/inventory/swarm.ini
-```
+The roles are idempotent. The second unchanged run should report `changed=0`.
 
-Replace all example public addresses with G1 outputs. Ansible automatically uses
-each manager's private default address as its Swarm advertise address.
+## Inputs from teammates
 
-Required security-group traffic between Swarm nodes:
+G1 must provide:
 
-- TCP `2377` for cluster management.
-- TCP/UDP `7946` for node communication.
-- UDP `4789` for overlay networking.
+- Running staging, Swarm manager and Swarm worker EC2 instances.
+- Stable `Role` or `Name` tags matching the inventory groups.
+- SSH access from the Ansible controller and the correct private key.
+- Security-group rules for SSH and Swarm ports.
+- IAM permission for EC2 discovery and SSM reads.
+- RDS, S3 and the required SSM parameters.
 
-Check the inventory and create the cluster:
+G2 must provide:
 
-```bash
-ansible-inventory -i ansible/inventory/swarm.ini --graph
-ansible-playbook -i ansible/inventory/swarm.ini \
-  ansible/playbooks/swarm.yml --syntax-check
-ansible-playbook -i ansible/inventory/swarm.ini \
-  ansible/playbooks/swarm.yml --private-key <PATH_TO_PEM_KEY>
-```
+- Immutable API and client image names/tags.
+- The Compose/runtime contract that G3 will adapt into `swarm/stack.yml`.
+- Health endpoints and the one-shot migration command.
 
-The manager creates the worker token at runtime. Ansible masks it with `no_log`
-and never writes it into Git. The optional public-image rehearsal runs two Nginx
-replicas on port `8080`:
-
-```bash
-ansible-playbook -i ansible/inventory/swarm.ini \
-  ansible/playbooks/swarm_rehearsal.yml \
-  --private-key <PATH_TO_PEM_KEY>
-```
-
-## Production inputs
-
-G1 must provide manager/worker addresses, SSH access, security-group rules, RDS
-endpoint, S3 bucket/region, IAM access, ECR names and load-balancer health data.
-
-G2 must provide immutable API/client image tags, ports, health endpoints,
-environment-variable names, entrypoints and the one-shot migration command.
+## Layout
 
 ```text
-G1 infrastructure -> Ansible inventory -> Docker/Swarm configuration
-G2 images + runtime contract -> migration -> application stack deployment
-Swarm services -> health checks -> rolling update -> rollback
+ansible/
+├── ansible.cfg, requirements.yml, inventory/, group_vars/
+├── preflight.yml, site.yml, verify.yml, plan_b.yml
+└── roles/{docker,app,swarm,webapp}/
 ```
+
+## Controller setup
+
+Run these commands on the Ansible controller, not on a managed target:
+
+```bash
+cd ansible
+python3 -m pip install --user ansible-core boto3 botocore
+ansible-galaxy collection install -r requirements.yml
+aws sts get-caller-identity
+```
+
+`ansible.cfg` expects the SSH key at `~/.ssh/ansible_rmit` and connects as
+`ec2-user`. Change those settings only if G1 supplies a different contract.
+
+Never commit PEM keys, passwords, AWS credentials, SSM values or Swarm tokens.
+
+## Discover and test the hosts
+
+```bash
+ansible-inventory --graph
+ansible-playbook preflight.yml
+```
+
+Required groups are `tag_Role_staging`, `tag_Role_swarm_manager` and
+`tag_Role_swarm_worker`. Continue only when preflight reports
+`unreachable=0` and `failed=0`.
+
+## Requirement 7 — configuration management
+
+Configure Docker, the staging runtime and the Swarm hosts:
+
+```bash
+ansible-playbook site.yml
+ansible-playbook site.yml
+```
+
+The first run may change the new machines. Save the recap from the second run;
+it should show `changed=0`, proving that Ansible preserves the desired state.
+
+Plan B is a separate single-host proof for Nginx, Gunicorn, systemd and Django
+static files. The application repository and built client must already exist on
+the staging host before running it:
+
+```bash
+ansible-playbook plan_b.yml
+ansible-playbook plan_b.yml
+```
+
+## Requirement 9 — orchestration
+
+`site.yml` automatically initializes the manager, retrieves the worker join
+token securely and joins every worker. Confirm the result with:
+
+```bash
+ansible-playbook verify.yml
+```
+
+After G2 supplies its contract, G3 finalizes the stack and G5 deploys it. G3 then proves:
+
+- Every expected node is `Ready` in `docker node ls`.
+- The API service has at least two replicas.
+- Both replicas serve the same product images with S3 enabled.
+- A rolling update changes the application version without dropped requests.
+- `docker service rollback` restores the previous working version.
+- Database migration runs once, not once per API replica.
+
+## Required SSM parameters
+
+```text
+/rmit/MEDIA_BUCKET
+/rmit/staging/{SECRET_KEY,DATABASE_URL,POSTGRES_PASSWORD}
+/rmit/prod/{SECRET_KEY,DATABASE_URL}
+```
+
+## Remaining integration work
+
+- Run all playbooks against the final G1 infrastructure.
+- Replace temporary values with G1's real tags, addresses and SSM contract.
+- Create the final stack from G2's image, runtime and migration contract.
+- Deploy at least two API replicas with `USE_S3=True`.
+- Capture idempotency, rolling-update and rollback evidence.
 
 ## Evidence checklist
 
-- [ ] Production preflight has `unreachable=0` and `failed=0`.
-- [ ] Second configuration run has `changed=0`.
-- [ ] One manager and all workers are `Ready`.
-- [ ] API runs with at least two replicas.
-- [ ] One-shot migration and application health checks succeed.
-- [ ] Both replicas serve the same product image with `USE_S3=True`.
-- [ ] A rolling update and rollback are demonstrated.
-
-## Security
-
-Never commit real inventories, PEM keys, passwords, AWS credentials, database URLs or Swarm tokens. Use approved AWS secret storage or Jenkins credentials.
+- Inventory graph and successful preflight recap.
+- First and second Ansible recaps; second run has `changed=0`.
+- Docker running on staging, manager and workers.
+- `docker node ls` showing one manager and all workers `Ready`.
+- `docker service ls` showing at least two API replicas.
+- Before/after `/api/version/` output during a rolling update.
+- Successful rollback output and restored version.
+- No secrets, private keys or join tokens visible in Git or screenshots.

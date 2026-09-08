@@ -1,0 +1,161 @@
+---
+- name: Install Plan B web packages
+  ansible.builtin.dnf:
+    name: "{{ webapp_packages }}"
+    state: present
+
+- name: Create the Plan B configuration directory
+  ansible.builtin.file:
+    path: "{{ webapp_environment_file | dirname }}"
+    state: directory
+    owner: "{{ webapp_user }}"
+    group: "{{ webapp_group }}"
+    mode: "0755"
+
+- name: Create the Nginx configuration directory
+  ansible.builtin.file:
+    path: "{{ webapp_nginx_config | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Check the Django source directory
+  ansible.builtin.stat:
+    path: "{{ webapp_server_dir }}/manage.py"
+  register: webapp_manage_py
+
+- name: Require application source before configuring Plan B
+  ansible.builtin.assert:
+    that:
+      - webapp_manage_py.stat.exists
+      - webapp_manage_py.stat.isreg
+    fail_msg: >-
+      Django source was not found at {{ webapp_server_dir }}. Stage the team
+      repository on the host or override webapp_repo_root before running this
+      optional Plan B playbook.
+
+- name: Check the built Vue client
+  ansible.builtin.stat:
+    path: "{{ webapp_client_dist_dir }}/index.html"
+  register: webapp_client_index
+  when: webapp_publish_client | bool
+
+- name: Require a built Vue client when publishing it
+  ansible.builtin.assert:
+    that:
+      - webapp_client_index.stat.exists
+      - webapp_client_index.stat.isreg
+    fail_msg: >-
+      Built client files were not found at {{ webapp_client_dist_dir }}. Run
+      npm ci and npm run build first, or set webapp_publish_client=false.
+  when: webapp_publish_client | bool
+
+- name: Create the Python virtual environment and install API dependencies
+  ansible.builtin.pip:
+    requirements: "{{ webapp_server_dir }}/requirements.txt"
+    virtualenv: "{{ webapp_virtualenv_dir }}"
+    virtualenv_command: /usr/bin/python3.11 -m venv
+  become_user: "{{ webapp_user }}"
+
+- name: Read Plan B configuration from SSM Parameter Store
+  ansible.builtin.set_fact:
+    webapp_secret_key: >-
+      {{ lookup('amazon.aws.aws_ssm', app_secret_key_parameter,
+                region=aws_region, decrypt=true) }}
+    webapp_database_url: >-
+      {{ lookup('amazon.aws.aws_ssm', app_database_url_parameter,
+                region=aws_region, decrypt=true) }}
+    webapp_media_bucket: >-
+      {{ lookup('amazon.aws.aws_ssm', app_media_bucket_parameter,
+                region=aws_region) }}
+  no_log: true
+
+- name: Render the Gunicorn environment file
+  ansible.builtin.template:
+    src: rmit-api.env.j2
+    dest: "{{ webapp_environment_file }}"
+    owner: "{{ webapp_user }}"
+    group: "{{ webapp_group }}"
+    mode: "0600"
+  no_log: true
+  notify: Restart RMIT API
+
+- name: Collect Django static files
+  ansible.builtin.command:
+    argv:
+      - "{{ webapp_virtualenv_dir }}/bin/python"
+      - manage.py
+      - collectstatic
+      - --noinput
+  args:
+    chdir: "{{ webapp_server_dir }}"
+  environment:
+    DJANGO_SETTINGS_MODULE: config.settings.prod
+    SECRET_KEY: "{{ webapp_secret_key }}"
+    ALLOWED_HOSTS: "{{ webapp_allowed_hosts }}"
+    DATABASE_URL: "{{ webapp_database_url }}"
+  register: webapp_collectstatic
+  changed_when: "'0 static files copied' not in webapp_collectstatic.stdout"
+  become_user: "{{ webapp_user }}"
+  no_log: true
+
+- name: Install the Gunicorn systemd service
+  ansible.builtin.template:
+    src: rmit-api.service.j2
+    dest: "/etc/systemd/system/{{ webapp_service_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Restart RMIT API
+
+- name: Start and enable the Gunicorn service
+  ansible.builtin.systemd:
+    name: "{{ webapp_service_name }}"
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Publish the built Vue client
+  ansible.builtin.copy:
+    src: "{{ webapp_client_dist_dir }}/"
+    dest: "{{ webapp_nginx_document_root }}/"
+    remote_src: true
+    owner: root
+    group: root
+    mode: preserve
+  when: webapp_publish_client | bool
+  notify: Validate and reload Nginx
+
+- name: Allow Nginx to traverse the application home directory
+  ansible.builtin.file:
+    path: "/home/{{ webapp_user }}"
+    mode: o+x
+
+- name: Install the RMIT Store Nginx configuration
+  ansible.builtin.template:
+    src: rmit-store.conf.j2
+    dest: "{{ webapp_nginx_config }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Validate and reload Nginx
+
+- name: Start and enable Nginx
+  ansible.builtin.service:
+    name: "{{ webapp_nginx_service }}"
+    state: started
+    enabled: true
+
+- name: Apply pending service changes before verification
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify the API through Nginx
+  ansible.builtin.uri:
+    url: http://127.0.0.1/healthz/
+    status_code: 200
+  register: webapp_health_check
+  retries: 5
+  delay: 3
+  until: webapp_health_check.status == 200

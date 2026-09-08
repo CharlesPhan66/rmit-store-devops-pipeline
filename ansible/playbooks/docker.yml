@@ -1,7 +1,0 @@
----
-- name: Configure Docker on G3 targets
-  hosts: g3_targets
-  become: true
-
-  roles:
-    - docker_engine
