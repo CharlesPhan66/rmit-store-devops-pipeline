@@ -20,9 +20,6 @@
     app_database_url: >-
       {{ lookup('amazon.aws.aws_ssm', app_database_url_parameter,
                 region=aws_region, decrypt=true) }}
-    app_postgres_password: >-
-      {{ lookup('amazon.aws.aws_ssm', app_postgres_password_parameter,
-                region=aws_region, decrypt=true) }}
     app_media_bucket: >-
       {{ lookup('amazon.aws.aws_ssm', app_media_bucket_parameter,
                 region=aws_region) }}

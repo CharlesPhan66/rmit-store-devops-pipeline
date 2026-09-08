@@ -1,0 +1,83 @@
+---
+- name: Validate the G1 and G2 production contract
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Require the final production topology
+      ansible.builtin.assert:
+        that:
+          - groups[swarm_manager_group] | default([]) | length == 1
+          - groups[swarm_worker_group] | default([]) | length >= 2
+        fail_msg: >-
+          Expected exactly one Swarm manager and at least two Swarm workers.
+          Check the EC2 Role/Name tags returned by the dynamic inventory.
+
+    - name: Resolve non-secret infrastructure values from SSM
+      ansible.builtin.set_fact:
+        contract_ecr_registry: >-
+          {{ lookup('amazon.aws.aws_ssm', swarm_ecr_registry_parameter,
+                    region=aws_region) }}
+        contract_media_bucket: >-
+          {{ lookup('amazon.aws.aws_ssm', swarm_media_bucket_parameter,
+                    region=aws_region) }}
+        contract_alb_dns: >-
+          {{ lookup('amazon.aws.aws_ssm', swarm_alb_dns_parameter,
+                    region=aws_region) }}
+
+    - name: Confirm that required secure parameters are readable
+      ansible.builtin.set_fact:
+        contract_secret_key: >-
+          {{ lookup('amazon.aws.aws_ssm', '/rmit/prod/SECRET_KEY',
+                    region=aws_region, decrypt=true) }}
+        contract_database_url: >-
+          {{ lookup('amazon.aws.aws_ssm', '/rmit/prod/DATABASE_URL',
+                    region=aws_region, decrypt=true) }}
+      no_log: true
+
+    - name: Require every resolved contract value
+      ansible.builtin.assert:
+        that:
+          - contract_ecr_registry | length > 0
+          - contract_media_bucket | length > 0
+          - contract_alb_dns | length > 0
+          - contract_secret_key | length > 0
+          - contract_database_url | length > 0
+        fail_msg: One or more required G1 SSM parameters are missing or empty.
+      no_log: true
+
+    - name: Check the G2 ECR repositories and list their newest image tags
+      ansible.builtin.command:
+        argv:
+          - aws
+          - ecr
+          - describe-images
+          - --region
+          - "{{ aws_region }}"
+          - --repository-name
+          - "{{ item }}"
+          - --query
+          - reverse(sort_by(imageDetails,&imagePushedAt))[:5].imageTags
+          - --output
+          - json
+      loop:
+        - "{{ swarm_api_repository }}"
+        - "{{ swarm_client_repository }}"
+      register: contract_ecr_images
+      changed_when: false
+
+    - name: Display the safe infrastructure contract
+      ansible.builtin.debug:
+        msg:
+          manager: "{{ groups[swarm_manager_group] }}"
+          workers: "{{ groups[swarm_worker_group] }}"
+          ecr_registry: "{{ contract_ecr_registry }}"
+          media_bucket: "{{ contract_media_bucket }}"
+          alb_dns: "{{ contract_alb_dns }}"
+
+    - name: Display the newest safe G2 image tags
+      ansible.builtin.debug:
+        msg: "{{ item.item }}: {{ item.stdout | from_json }}"
+      loop: "{{ contract_ecr_images.results }}"
+      loop_control:
+        label: "{{ item.item }}"

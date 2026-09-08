@@ -6,8 +6,7 @@ app_deploy_dir: /home/ec2-user/deploy
 app_ssm_prefix: /rmit/staging
 app_secret_key_parameter: "{{ app_ssm_prefix }}/SECRET_KEY"
 app_database_url_parameter: "{{ app_ssm_prefix }}/DATABASE_URL"
-app_postgres_password_parameter: "{{ app_ssm_prefix }}/POSTGRES_PASSWORD"
-app_media_bucket_parameter: /rmit/MEDIA_BUCKET
+app_media_bucket_parameter: "{{ app_ssm_prefix }}/MEDIA_BUCKET"
 
 app_allowed_hosts: "{{ ansible_host }},127.0.0.1,localhost"
 app_client_url: "http://{{ ansible_host }}:8081"

@@ -17,3 +17,17 @@ docker_configure_ecr_helper: true
 swarm_manager_group: tag_Role_swarm_manager
 swarm_worker_group: tag_Role_swarm_worker
 swarm_manager_port: 2377
+
+# G2 image/runtime contract. Override image_tag at deployment time with an
+# immutable Git SHA; do not deploy the mutable "latest" tag to production.
+swarm_stack_name: rmit
+swarm_api_repository: rmit-api
+swarm_client_repository: rmit-client
+swarm_api_replicas: 2
+swarm_client_replicas: 2
+swarm_deploy_dir: /home/ec2-user/deploy/swarm
+
+# G1 integration contract stored in SSM Parameter Store.
+swarm_ecr_registry_parameter: /rmit/ECR_REGISTRY
+swarm_media_bucket_parameter: /rmit/prod/MEDIA_BUCKET
+swarm_alb_dns_parameter: /rmit/prod/ALB_DNS

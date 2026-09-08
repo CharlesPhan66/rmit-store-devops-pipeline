@@ -11,7 +11,7 @@ G3 does not build images or configure Jenkins. G2 supplies the deployment contra
 
 ```text
 G1 infrastructure -> Ansible inventory -> configure EC2 -> Docker Swarm
-G2 images + stack.yml ------------------------------------^        |
+G2 images + runtime contract -----------------------------^        |
 G5 Jenkins --------------------------------------------------------+-> deploy
 ```
 
@@ -22,9 +22,11 @@ G5 Jenkins --------------------------------------------------------+-> deploy
 - Reusable Docker installation and configuration role.
 - Staging runtime role for Python 3.11, pip and PostgreSQL client.
 - Staging environment file rendered from SSM Parameter Store.
-- Optional Plan B role for Nginx, Gunicorn, systemd and `collectstatic`.
 - Automatic Swarm manager initialization and worker joining.
 - Swarm secrets created from SSM without committing secret values.
+- Production stack for two API replicas and two client replicas.
+- One-shot database migration before each production deployment.
+- S3-backed shared media and rolling-update/rollback policies.
 - Verification playbook for Docker, staging files, nodes and secret names.
 
 The roles are idempotent. The second unchanged run should report `changed=0`.
@@ -51,8 +53,8 @@ G2 must provide:
 ```text
 ansible/
 ├── ansible.cfg, requirements.yml, inventory/, group_vars/
-├── preflight.yml, site.yml, verify.yml, plan_b.yml
-└── roles/{docker,app,swarm,webapp}/
+├── preflight.yml, site.yml, verify.yml
+└── roles/{docker,app,swarm}/
 ```
 
 ## Controller setup
@@ -94,15 +96,6 @@ ansible-playbook site.yml
 The first run may change the new machines. Save the recap from the second run;
 it should show `changed=0`, proving that Ansible preserves the desired state.
 
-Plan B is a separate single-host proof for Nginx, Gunicorn, systemd and Django
-static files. The application repository and built client must already exist on
-the staging host before running it:
-
-```bash
-ansible-playbook plan_b.yml
-ansible-playbook plan_b.yml
-```
-
 ## Requirement 9 — orchestration
 
 `site.yml` automatically initializes the manager, retrieves the worker join
@@ -112,7 +105,25 @@ token securely and joins every worker. Confirm the result with:
 ansible-playbook verify.yml
 ```
 
-After G2 supplies its contract, G3 finalizes the stack and G5 deploys it. G3 then proves:
+Validate the integrated G1/G2 contract before changing production:
+
+```bash
+ansible-playbook contract.yml
+```
+
+The command confirms the production topology, reads the required SSM
+parameters without printing secrets, and lists the newest API/client image
+tags in ECR. Select the same immutable tag that G2/G5 built for both images.
+
+Deploy with that exact tag:
+
+```bash
+ansible-playbook deploy.yml -e image_tag=<GIT_SHA>
+```
+
+`deploy.yml` validates the images, runs `python manage.py migrate` in one
+temporary service, deploys the stack, waits for every replica, and checks
+`/readyz/` and `/api/version/`. G3 then proves:
 
 - Every expected node is `Ready` in `docker node ls`.
 - The API service has at least two replicas.
@@ -124,16 +135,17 @@ After G2 supplies its contract, G3 finalizes the stack and G5 deploys it. G3 the
 ## Required SSM parameters
 
 ```text
-/rmit/MEDIA_BUCKET
-/rmit/staging/{SECRET_KEY,DATABASE_URL,POSTGRES_PASSWORD}
+/rmit/ECR_REGISTRY
+/rmit/staging/{SECRET_KEY,DATABASE_URL,MEDIA_BUCKET}
+/rmit/prod/{ALB_DNS,MEDIA_BUCKET}
 /rmit/prod/{SECRET_KEY,DATABASE_URL}
 ```
 
 ## Remaining integration work
 
 - Run all playbooks against the final G1 infrastructure.
-- Replace temporary values with G1's real tags, addresses and SSM contract.
-- Create the final stack from G2's image, runtime and migration contract.
+- Confirm the deployed G1 tags and SSM contract with `contract.yml`.
+- Select one image tag that exists in both G2 ECR repositories.
 - Deploy at least two API replicas with `USE_S3=True`.
 - Capture idempotency, rolling-update and rollback evidence.
 

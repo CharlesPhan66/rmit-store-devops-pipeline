@@ -1,0 +1,114 @@
+version: "3.8"
+
+services:
+  api:
+    image: "${ECR_REGISTRY}/${API_REPOSITORY}:${IMAGE_TAG}"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        export SECRET_KEY="$$(cat /run/secrets/SECRET_KEY)"
+        export DATABASE_URL="$$(cat /run/secrets/DATABASE_URL)"
+        exec gunicorn config.wsgi:application --bind 0.0.0.0:8000 --access-logfile - --error-logfile -
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.prod
+      ALLOWED_HOSTS: "${ALB_DNS},127.0.0.1,localhost"
+      CLIENT_URL: "http://${ALB_DNS}"
+      CSRF_TRUSTED_ORIGINS: "http://${ALB_DNS}"
+      SESSION_COOKIE_SECURE: "False"
+      CSRF_COOKIE_SECURE: "False"
+      USE_S3: "True"
+      AWS_STORAGE_BUCKET_NAME: "${MEDIA_BUCKET}"
+      AWS_S3_REGION_NAME: "${AWS_REGION}"
+      APP_VERSION: "${IMAGE_TAG}"
+      GIT_COMMIT: "${IMAGE_TAG}"
+    secrets:
+      - SECRET_KEY
+      - DATABASE_URL
+    networks:
+      - rmit
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz/', timeout=3)
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      replicas: ${API_REPLICAS}
+      placement:
+        constraints:
+          - node.role == worker
+        preferences:
+          - spread: node.hostname
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+        monitor: 30s
+      rollback_config:
+        parallelism: 1
+        delay: 5s
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+
+  client:
+    image: "${ECR_REGISTRY}/${CLIENT_REPOSITORY}:${IMAGE_TAG}"
+    environment:
+      API_BASE_URL: /api
+    configs:
+      - source: client_nginx
+        target: /etc/nginx/conf.d/default.conf
+    ports:
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: ingress
+    networks:
+      - rmit
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -q
+        - --spider
+        - http://127.0.0.1/
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      replicas: ${CLIENT_REPLICAS}
+      placement:
+        constraints:
+          - node.role == worker
+        preferences:
+          - spread: node.hostname
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+
+secrets:
+  SECRET_KEY:
+    external: true
+  DATABASE_URL:
+    external: true
+
+configs:
+  client_nginx:
+    name: "client_nginx_${IMAGE_TAG}"
+    file: ./client-nginx.conf
+
+networks:
+  rmit:
+    driver: overlay

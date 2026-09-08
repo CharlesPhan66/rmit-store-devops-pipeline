@@ -54,6 +54,27 @@
   loop: "{{ docker_users }}"
   when: docker_configure_ecr_helper | bool
 
+- name: Create the root Docker configuration directory
+  ansible.builtin.file:
+    path: /root/.docker
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: docker_configure_ecr_helper | bool
+
+- name: Configure the Amazon ECR credential helper for automated deployments
+  ansible.builtin.copy:
+    dest: /root/.docker/config.json
+    content: |
+      {
+        "credsStore": "ecr-login"
+      }
+    owner: root
+    group: root
+    mode: "0600"
+  when: docker_configure_ecr_helper | bool
+
 - name: Create the Docker CLI plugin directory
   ansible.builtin.file:
     path: "{{ docker_compose_plugin_dir }}"

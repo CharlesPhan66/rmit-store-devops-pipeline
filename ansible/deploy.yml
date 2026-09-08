@@ -1,0 +1,288 @@
+---
+- name: Deploy the RMIT Store production stack
+  hosts: tag_Role_swarm_manager
+  become: true
+  gather_facts: false
+  vars:
+    migration_service_name: "{{ swarm_stack_name }}-migrate"
+  pre_tasks:
+    - name: Require an immutable G2 image tag
+      ansible.builtin.assert:
+        that:
+          - image_tag is defined
+          - image_tag | default('') | string | length >= 7
+          - image_tag | default('latest') != 'latest'
+        fail_msg: >-
+          Pass the exact image tag built by G2/G5, for example
+          -e image_tag=abc1234. The mutable latest tag is not accepted.
+
+    - name: Resolve production deployment values from SSM
+      ansible.builtin.set_fact:
+        resolved_ecr_registry: >-
+          {{ lookup('amazon.aws.aws_ssm', swarm_ecr_registry_parameter,
+                    region=aws_region) }}
+        resolved_media_bucket: >-
+          {{ lookup('amazon.aws.aws_ssm', swarm_media_bucket_parameter,
+                    region=aws_region) }}
+        resolved_alb_dns: >-
+          {{ lookup('amazon.aws.aws_ssm', swarm_alb_dns_parameter,
+                    region=aws_region) }}
+
+    - name: Require the production Swarm secrets created by site.yml
+      ansible.builtin.command:
+        argv:
+          - docker
+          - secret
+          - inspect
+          - "{{ item }}"
+      loop:
+        - SECRET_KEY
+        - DATABASE_URL
+      changed_when: false
+
+    - name: Check that the requested API and client images exist in ECR
+      ansible.builtin.command:
+        argv:
+          - aws
+          - ecr
+          - describe-images
+          - --region
+          - "{{ aws_region }}"
+          - --repository-name
+          - "{{ item }}"
+          - --image-ids
+          - "imageTag={{ image_tag }}"
+      loop:
+        - "{{ swarm_api_repository }}"
+        - "{{ swarm_client_repository }}"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+
+  tasks:
+    - name: Create the production deployment directory
+      ansible.builtin.file:
+        path: "{{ swarm_deploy_dir }}"
+        state: directory
+        owner: ec2-user
+        group: ec2-user
+        mode: "0755"
+
+    - name: Copy the reviewed Swarm stack
+      ansible.builtin.copy:
+        src: ../swarm/stack.yml
+        dest: "{{ swarm_deploy_dir }}/stack.yml"
+        owner: ec2-user
+        group: ec2-user
+        mode: "0644"
+
+    - name: Copy the client reverse-proxy configuration
+      ansible.builtin.copy:
+        src: ../swarm/client-nginx.conf
+        dest: "{{ swarm_deploy_dir }}/client-nginx.conf"
+        owner: ec2-user
+        group: ec2-user
+        mode: "0644"
+
+    - name: Validate the rendered Docker stack
+      ansible.builtin.command:
+        argv:
+          - docker
+          - stack
+          - config
+          - --compose-file
+          - stack.yml
+        chdir: "{{ swarm_deploy_dir }}"
+      environment:
+        ECR_REGISTRY: "{{ resolved_ecr_registry }}"
+        API_REPOSITORY: "{{ swarm_api_repository }}"
+        CLIENT_REPOSITORY: "{{ swarm_client_repository }}"
+        IMAGE_TAG: "{{ image_tag }}"
+        API_REPLICAS: "{{ swarm_api_replicas | string }}"
+        CLIENT_REPLICAS: "{{ swarm_client_replicas | string }}"
+        ALB_DNS: "{{ resolved_alb_dns }}"
+        MEDIA_BUCKET: "{{ resolved_media_bucket }}"
+        AWS_REGION: "{{ aws_region }}"
+      changed_when: false
+
+    - name: Inspect a possibly interrupted migration service
+      ansible.builtin.command:
+        argv:
+          - docker
+          - service
+          - inspect
+          - "{{ migration_service_name }}"
+      register: old_migration_service
+      failed_when: false
+      changed_when: false
+
+    - name: Remove the interrupted migration service before retrying
+      ansible.builtin.command:
+        argv:
+          - docker
+          - service
+          - rm
+          - "{{ migration_service_name }}"
+      when: old_migration_service.rc == 0
+      changed_when: true
+
+    - name: Run the database migration exactly once for this deployment
+      ansible.builtin.command:
+        argv:
+          - docker
+          - service
+          - create
+          - --detach
+          - --name
+          - "{{ migration_service_name }}"
+          - --restart-condition
+          - none
+          - --secret
+          - SECRET_KEY
+          - --secret
+          - DATABASE_URL
+          - --env
+          - DJANGO_SETTINGS_MODULE=config.settings.prod
+          - --env
+          - "ALLOWED_HOSTS={{ resolved_alb_dns }},127.0.0.1,localhost"
+          - --env
+          - USE_S3=True
+          - --env
+          - "AWS_STORAGE_BUCKET_NAME={{ resolved_media_bucket }}"
+          - --env
+          - "AWS_S3_REGION_NAME={{ aws_region }}"
+          - --with-registry-auth
+          - "{{ resolved_ecr_registry }}/{{ swarm_api_repository }}:{{ image_tag }}"
+          - /bin/sh
+          - -ec
+          - >-
+            export SECRET_KEY="$(cat /run/secrets/SECRET_KEY)";
+            export DATABASE_URL="$(cat /run/secrets/DATABASE_URL)";
+            exec python manage.py migrate --noinput
+      changed_when: true
+
+    - name: Wait for the one-shot migration to finish
+      ansible.builtin.command:
+        argv:
+          - docker
+          - service
+          - ps
+          - "{{ migration_service_name }}"
+          - --filter
+          - desired-state=shutdown
+          - --format
+          - "{% raw %}{{.CurrentState}}|{{.Error}}{% endraw %}"
+      register: migration_result
+      until: >-
+        migration_result.stdout is search('Complete|Failed|Rejected')
+      retries: 60
+      delay: 5
+      changed_when: false
+
+    - name: Require a successful database migration
+      ansible.builtin.assert:
+        that:
+          - migration_result.stdout is search('Complete')
+          - migration_result.stdout is not search('Failed|Rejected')
+        fail_msg: >-
+          Migration failed. Inspect it before retrying with:
+          docker service logs {{ migration_service_name }}
+
+    - name: Remove the completed one-shot migration service
+      ansible.builtin.command:
+        argv:
+          - docker
+          - service
+          - rm
+          - "{{ migration_service_name }}"
+      changed_when: true
+
+    - name: Deploy or update the production stack
+      ansible.builtin.command:
+        argv:
+          - docker
+          - stack
+          - deploy
+          - --compose-file
+          - stack.yml
+          - --with-registry-auth
+          - "{{ swarm_stack_name }}"
+        chdir: "{{ swarm_deploy_dir }}"
+      environment:
+        ECR_REGISTRY: "{{ resolved_ecr_registry }}"
+        API_REPOSITORY: "{{ swarm_api_repository }}"
+        CLIENT_REPOSITORY: "{{ swarm_client_repository }}"
+        IMAGE_TAG: "{{ image_tag }}"
+        API_REPLICAS: "{{ swarm_api_replicas | string }}"
+        CLIENT_REPLICAS: "{{ swarm_client_replicas | string }}"
+        ALB_DNS: "{{ resolved_alb_dns }}"
+        MEDIA_BUCKET: "{{ resolved_media_bucket }}"
+        AWS_REGION: "{{ aws_region }}"
+      register: stack_deploy
+      changed_when: >-
+        'Updating service' in stack_deploy.stdout or
+        'Creating service' in stack_deploy.stdout or
+        'Creating network' in stack_deploy.stdout or
+        'Creating config' in stack_deploy.stdout
+
+    - name: Wait for the API replicas
+      ansible.builtin.command:
+        argv:
+          - docker
+          - service
+          - ls
+          - --filter
+          - "name={{ swarm_stack_name }}_api"
+          - --format
+          - "{% raw %}{{.Replicas}}{% endraw %}"
+      register: api_replica_status
+      until: >-
+        api_replica_status.stdout | trim ==
+        (swarm_api_replicas | string) ~ '/' ~ (swarm_api_replicas | string)
+      retries: 36
+      delay: 5
+      changed_when: false
+
+    - name: Wait for the client replicas
+      ansible.builtin.command:
+        argv:
+          - docker
+          - service
+          - ls
+          - --filter
+          - "name={{ swarm_stack_name }}_client"
+          - --format
+          - "{% raw %}{{.Replicas}}{% endraw %}"
+      register: client_replica_status
+      until: >-
+        client_replica_status.stdout | trim ==
+        (swarm_client_replicas | string) ~ '/' ~ (swarm_client_replicas | string)
+      retries: 36
+      delay: 5
+      changed_when: false
+
+    - name: Check the production readiness endpoint through Swarm ingress
+      ansible.builtin.uri:
+        url: http://127.0.0.1/readyz/
+        status_code: 200
+        return_content: true
+      register: production_readiness
+      retries: 12
+      delay: 5
+      until: production_readiness.status == 200
+
+    - name: Read the deployed application version
+      ansible.builtin.uri:
+        url: http://127.0.0.1/api/version/
+        status_code: 200
+        return_content: true
+      register: production_version
+
+    - name: Display the safe deployment result
+      ansible.builtin.debug:
+        msg:
+          stack: "{{ swarm_stack_name }}"
+          image_tag: "{{ image_tag }}"
+          api_replicas: "{{ api_replica_status.stdout }}"
+          client_replicas: "{{ client_replica_status.stdout }}"
+          version_response: "{{ production_version.content }}"
