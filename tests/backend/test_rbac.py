@@ -6,6 +6,9 @@ from apps.merchants.models import Merchant
 
 User = get_user_model()
 
+# Selected by the pipeline's `pytest -m "unit or integration"` Test stage.
+pytestmark = pytest.mark.integration
+
 
 @pytest.mark.django_db
 class TestSecurityAndRBACMatrix:

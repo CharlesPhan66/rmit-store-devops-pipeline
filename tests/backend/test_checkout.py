@@ -7,6 +7,9 @@ from apps.orders.models import Order
 
 User = get_user_model()
 
+# Selected by the pipeline's `pytest -m "unit or integration"` Test stage.
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture
 def member_user(db):

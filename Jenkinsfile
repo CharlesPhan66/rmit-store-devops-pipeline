@@ -90,6 +90,25 @@ pipeline {
             }
         }
 
+        // Frontend unit tests (Vitest + jsdom) in the client image's test stage.
+        // A failure here stops the pipeline before any push or deploy.
+        stage('Frontend unit') {
+            steps {
+                sh "docker build -f docker/client.Dockerfile --target test -t rmit-client:test-${env.SHA} ."
+                sh "mkdir -p reports"
+                sh """
+                    docker run --rm \
+                        -v "\$PWD/reports:/repo/reports" \
+                        rmit-client:test-${env.SHA}
+                """
+            }
+            post {
+                always {
+                    junit allowEmptyResults: false, testResults: 'reports/junit-frontend.xml'
+                }
+            }
+        }
+
         // Authenticate to ECR using the EC2 instance profile, avoiding static credentials.
         // ECR must match the registry used by the Compose and Swarm image definitions.
         // Docker Hub would require restoring Jenkins credentials and its login step.
@@ -160,6 +179,30 @@ pipeline {
             post {
                 always {
                     junit 'reports/smoke.xml'
+                }
+            }
+        }
+
+        // Browser end-to-end journeys against the just-deployed staging build,
+        // on the official Playwright image (browsers preinstalled). Runs after
+        // the staging smoke test and before any production stage, so a failed
+        // journey notifies the team and leaves production untouched.
+        stage('E2E staging') {
+            steps {
+                sh "mkdir -p reports && rm -rf test-results"
+                sh """
+                    docker run --rm --network host \
+                        -e TARGET_URL=${STAGING_URL} \
+                        -e CI=1 \
+                        -v "\$PWD:/work" -w /work \
+                        mcr.microsoft.com/playwright:v1.42.0-jammy \
+                        npx playwright test --config=tests/e2e/playwright.config.mjs
+                """
+            }
+            post {
+                always {
+                    junit allowEmptyResults: true, testResults: 'reports/junit-e2e.xml'
+                    archiveArtifacts artifacts: 'reports/e2e-html-report/**', allowEmptyArchive: true
                 }
             }
         }

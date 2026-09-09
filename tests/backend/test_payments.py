@@ -5,6 +5,9 @@ from django.test import TestCase
 from apps.orders.payments import authorise, PaymentDeclined
 from apps.orders.services import money, tax_for
 
+# Selected by the pipeline's `pytest -m "unit or integration"` Test stage.
+pytestmark = pytest.mark.integration
+
 
 def calculate_order_total(items, tax_rate=Decimal("0.05")):
     """Local test helper for calculating order total using server's tax rounding rules."""

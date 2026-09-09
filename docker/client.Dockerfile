@@ -28,6 +28,32 @@ COPY app/client/ ./
 
 RUN npm run build
 
+# Stage 1b — frontend unit tests (Vitest + jsdom). Not shipped in the runtime image.
+#
+#   docker build -f docker/client.Dockerfile --target test -t rmit-client:test .
+#   docker run --rm -v "$PWD/reports:/repo/reports" rmit-client:test
+#
+# Layout matches what tests/frontend/vite.config.mjs expects: the client under
+# /repo/app/client and the libs its aliases resolve at /repo/node_modules. The
+# app's own package.json is not modified.
+FROM node:22-alpine AS test
+
+WORKDIR /repo
+
+COPY app/client/package.json app/client/package-lock.json app/client/
+RUN cd app/client && npm ci
+
+# Test tooling plus the libs tests/frontend/vite.config.mjs resolves from
+# /repo/node_modules. Throwaway package.json, never written back to the repo.
+RUN npm init -y >/dev/null && npm install --no-save \
+    vitest@^2.1 @vitest/coverage-v8@^2.1 jsdom@^25 \
+    vue@^3.5 pinia@^2.2 @vitejs/plugin-vue@^5.2
+
+COPY app/client/ app/client/
+COPY tests/ tests/
+
+CMD ["npx", "vitest", "run", "--config", "tests/frontend/vite.config.mjs"]
+
 # Stage 2 — serve
 FROM nginx:1.27-alpine AS runtime
 
