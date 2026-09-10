@@ -77,6 +77,8 @@ pipeline {
                         -v "\$PWD/reports:/repo/reports" \
                         rmit-api:test-${env.SHA} \
                         pytest tests/backend/ -c tests/backend/pytest.ini -m "unit or integration" \
+                        -o "markers=integration: Integration tests" \
+                        -o "markers=unit: Unit tests" \
                         --junitxml=/repo/reports/junit-backend.xml
                 """
             }
