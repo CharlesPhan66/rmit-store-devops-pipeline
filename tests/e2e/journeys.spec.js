@@ -99,9 +99,7 @@ test.describe("RMIT Store E2E Full Acceptance Suite", () => {
     await page.locator('button:has-text("Pay and place order")').click();
 
     // Expect decline message in notification alert
-    await expect(
-      page.locator(".toast-host .alert, .alert-danger, .is-invalid"),
-    ).toBeVisible();
+    await expect(page.locator(".alert-danger").first()).toBeVisible();
 
     // Checkout with approved test card
     await page.locator("#card-number").fill("4242424242424242");
