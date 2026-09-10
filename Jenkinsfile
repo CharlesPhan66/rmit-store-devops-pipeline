@@ -198,7 +198,7 @@ pipeline {
                         -e TARGET_URL=${STAGING_URL} \
                         -e CI=1 \
                         -v "\$PWD:/work" -w /work \
-                        mcr.microsoft.com/playwright:v1.42.0-jammy \
+                        mcr.microsoft.com/playwright:v1.63.0-jammy \
                         sh -c "npm install -D @playwright/test axios && npx playwright test --config=tests/e2e/playwright.config.mjs; STATUS=\\\$?; chmod -R 777 reports test-results 2>/dev/null || true; exit \\\$STATUS"
                 """
             }
