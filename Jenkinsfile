@@ -1,5 +1,5 @@
-// Author: @CharlesPhan66 (Charles Phan)
-// Last updated: 2/9/2026
+// Author: @danzelexp2713 (danzel)
+// Last updated: 10/9/2026
 pipeline {
     agent any
 
@@ -39,7 +39,7 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
-                sh 'rm -rf reports && mkdir -p reports'
+                sh 'rm -rf reports && mkdir -p reports/coverage-html reports/e2e-html-report'
                 script {
                     env.SHA = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
                 }
@@ -59,10 +59,9 @@ pipeline {
             }
         }
 
-        stage('Test') {
+        stage('Test Backend') {
             steps {
                 sh "docker build -f docker/api.Dockerfile --target test -t rmit-api:test-${env.SHA} ."
-                sh "mkdir -p reports"
                 sh """
                     docker network create ci-${env.BUILD_NUMBER} || true
                     docker run -d --name ci-db-${env.BUILD_NUMBER} \
@@ -74,9 +73,11 @@ pipeline {
                     sleep 10
                     docker run --rm --network ci-${env.BUILD_NUMBER} \
                         -e DATABASE_URL=postgres://rmit:rmit@ci-db-${env.BUILD_NUMBER}:5432/rmit_store \
+                        -e PYTHONPATH=".:app/server" \
                         -v "\$PWD/reports:/repo/reports" \
-                        rmit-api:test-${env.SHA} pytest -m "unit or integration" \
-                        --junitxml=reports/backend.xml
+                        rmit-api:test-${env.SHA} \
+                        pytest tests/backend/ -c tests/backend/pytest.ini -m "unit or integration" \
+                        --junitxml=/repo/reports/junit-backend.xml
                 """
             }
             post {
@@ -85,21 +86,21 @@ pipeline {
                         docker rm -f ci-db-${env.BUILD_NUMBER} || true
                         docker network rm ci-${env.BUILD_NUMBER} || true
                     """
-                    junit allowEmptyResults: false, testResults: 'reports/backend.xml'
+                    junit allowEmptyResults: false, testResults: 'reports/junit-backend.xml'
                 }
             }
         }
 
         // Frontend unit tests (Vitest + jsdom) in the client image's test stage.
         // A failure here stops the pipeline before any push or deploy.
-        stage('Frontend unit') {
+        stage('Test Frontend') {
             steps {
                 sh "docker build -f docker/client.Dockerfile --target test -t rmit-client:test-${env.SHA} ."
-                sh "mkdir -p reports"
                 sh """
                     docker run --rm \
                         -v "\$PWD/reports:/repo/reports" \
-                        rmit-client:test-${env.SHA}
+                        rmit-client:test-${env.SHA} \
+                        npx vitest run --config tests/frontend/vite.config.mjs --reporter=junit --outputFile=/repo/reports/junit-frontend.xml
                 """
             }
             post {
@@ -169,16 +170,18 @@ pipeline {
             steps {
                 sh """
                     docker run --rm --network host \
+                        -e TARGET_URL=${STAGING_URL} \
                         -e BASE_URL=${STAGING_URL} \
                         -e GIT_SHA=${env.SHA} \
                         -e EXPECT_CATALOGUE=1 \
                         -v "\$PWD/reports:/repo/reports" \
-                        rmit-api:test-${env.SHA} pytest tests/smoke --junitxml=reports/smoke.xml
+                        rmit-api:test-${env.SHA} pytest tests/smoke/test_smoke.py -m smoke \
+                        --junitxml=/repo/reports/junit-smoke-staging.xml
                 """
             }
             post {
                 always {
-                    junit 'reports/smoke.xml'
+                    junit allowEmptyResults: false, testResults: 'reports/junit-smoke-staging.xml'
                 }
             }
         }
@@ -189,14 +192,14 @@ pipeline {
         // journey notifies the team and leaves production untouched.
         stage('E2E staging') {
             steps {
-                sh "mkdir -p reports && rm -rf test-results"
+                sh "rm -rf test-results"
                 sh """
                     docker run --rm --network host \
                         -e TARGET_URL=${STAGING_URL} \
                         -e CI=1 \
                         -v "\$PWD:/work" -w /work \
                         mcr.microsoft.com/playwright:v1.42.0-jammy \
-                        npx playwright test --config=tests/e2e/playwright.config.mjs
+                        sh -c "npm install -D @playwright/test axios && npx playwright test --config=tests/e2e/playwright.config.mjs; STATUS=\\\$?; chmod -R 777 reports test-results 2>/dev/null || true; exit \\\$STATUS"
                 """
             }
             post {
@@ -299,15 +302,17 @@ pipeline {
             steps {
                 sh """
                     docker run --rm --network host \
+                        -e TARGET_URL=${PROD_URL} \
                         -e BASE_URL=${PROD_URL} \
                         -e GIT_SHA=${env.SHA} \
                         -v "\$PWD/reports:/repo/reports" \
-                        rmit-api:test-${env.SHA} pytest tests/smoke --junitxml=reports/smoke-prod.xml
+                        rmit-api:test-${env.SHA} pytest tests/smoke/test_smoke.py -m smoke \
+                        --junitxml=/repo/reports/junit-smoke-prod.xml
                 """
             }
             post {
                 always {
-                    junit 'reports/smoke-prod.xml'
+                    junit allowEmptyResults: false, testResults: 'reports/junit-smoke-prod.xml'
                 }
             }
         }
