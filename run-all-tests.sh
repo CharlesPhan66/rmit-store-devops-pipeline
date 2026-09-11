@@ -1,3 +1,6 @@
+# Author: @danzelexp2713 (danzel)
+# Last updated: 12/09/2026
+
 #!/usr/bin/env bash
 set -e
 
