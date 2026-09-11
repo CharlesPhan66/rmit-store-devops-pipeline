@@ -1,0 +1,74 @@
+---
+# This replaces the user data of jenkins server
+- name: Grow /tmp so the Jenkins node monitor stays happy
+  ansible.posix.mount:
+    path: /tmp
+    src: tmpfs
+    fstype: tmpfs
+    opts: defaults,size=3G
+    state: mounted
+
+- name: Install Java 21 and the AWS CLI
+  ansible.builtin.dnf:
+    name:
+      - java-21-amazon-corretto
+      - awscli-2
+    state: present
+
+- name: Add the Jenkins repository
+  ansible.builtin.get_url:
+    url: https://pkg.jenkins.io/redhat-stable/jenkins.repo
+    dest: /etc/yum.repos.d/jenkins.repo
+    mode: '0644'
+
+- name: Import the Jenkins repository GPG key
+  ansible.builtin.rpm_key:
+    key: https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
+    state: present
+
+- name: Install Jenkins
+  ansible.builtin.dnf:
+    name: jenkins
+    state: present
+
+- name: Let the jenkins user reach the docker cli
+  ansible.builtin.user:
+    name: jenkins
+    groups: docker
+    append: true
+  notify: restart jenkins
+
+- name: Enable and start the Jenkins service
+  ansible.builtin.systemd:
+    name: jenkins
+    enabled: true
+    state: started
+
+- name: Give the jenkins user an SSH key
+  ansible.builtin.user:
+    name: jenkins
+    generate_ssh_key: true
+    ssh_key_type: ed25519
+    ssh_key_file: .ssh/id_ed25519
+
+- name: Read the public half
+  ansible.builtin.slurp:
+    src: /var/lib/jenkins/.ssh/id_ed25519.pub
+  register: jenkins_pubkey
+
+- name: Publish it so the deploy targets can authorise it
+  ansible.builtin.command:
+    argv:
+      - aws
+      - ssm
+      - put-parameter
+      - --region
+      - "{{ aws_region }}"
+      - --name
+      - /rmit/JENKINS_PUBKEY
+      - --type
+      - String
+      - --overwrite
+      - --value
+      - "{{ jenkins_pubkey.content | b64decode | trim }}"
+  changed_when: false

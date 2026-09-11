@@ -1,0 +1,140 @@
+# Author: Charles
+# RMIT Store - the whole stack on one host.
+#
+# Build the two images FIRST, then bring the stack up. This file has no
+# `build:` section anywhere: it only runs images, it never produces them.
+#
+#   docker build -f docker/api.Dockerfile    --target runtime -t rmit-api:local .
+#   docker build -f docker/client.Dockerfile                  -t rmit-client:local .
+#
+#   docker compose up -d
+#   docker compose ps
+#   docker compose logs -f
+#   docker compose down       # keeps the database
+#   docker compose down -v    # deletes the database too
+#
+# Why the split:
+#   - `docker compose --build` delegates to buildx, which `dnf install docker`
+#     on AL2023 does not provide. Plain `docker build` needs no plugin.
+#   - Building and running are two different jobs. Jenkins builds an image once,
+#     tags it by commit, pushes it, and every environment then runs that exact
+#     image. A compose file that can rebuild on the spot invites a host to run
+#     something no other host has.
+#   - Docker Swarm ignores `build:` outright, so swarm/stack.yml cannot have one.
+#     Keeping this file build-free means it already has the shape Swarm needs.
+#
+# If an image is missing, `up` fails with "Unable to find image ... locally"
+# instead of silently building something. That error is the point: it says
+# build step skipped, not here is a container from who-knows-which commit.
+#
+# Description of the services and how they work together:
+# Creates a Postgres database, runs migrations, starts the Django API, and serves the Vue SPA through nginx. The API is not exposed directly; the SPA proxies requests to it.
+# db must be healthy before migrate runs, and migrate must complete successfully before api starts. The client waits for api to be healthy before it starts serving requests.
+# Dependencies: db <- migrate <- api <- client
+# migrate is a one-time job that initializes the database schema, not a long-running service. It exits after it completes, and the api service will not start until it has completed successfully.
+
+# Specifies a custom project name for the Compose application. This is useful to avoid naming conflicts with other Compose projects on the same host.
+# Without this, Compose names every container after the folder, which here is 2026b-cosc2767-a2-sg-team-13.
+name: rmit-store
+
+services:
+
+  # --- Database --------------------------------------------------------------
+  # This is the same as dedicated server hosting psql in plan B, but here it is a container
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rmit
+      POSTGRES_PASSWORD: rmit
+      POSTGRES_DB: rmit_store
+    # The database is stored in a volume, so it persists across container restarts and even after the container is deleted.
+    # This is important for development, as you don't want to lose your data every time you rebuild the image or restart the container.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # A started container is not a ready database. Postgres needs a few more
+    # seconds before it accepts connections, so the services below wait for
+    # this check to pass rather than for the container to start.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rmit -d rmit_store"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # --- Migrations ------------------------------------------------------------
+  # Runs once to initialize the database, exits, and the API container is not allowed to start until it succeeds.
+  # This is why migrate is in neither the Dockerfile nor an entrypoint: it must run once per release, not once per container.
+  #
+  # Same image as api - same Dockerfile, same build, only the command differs.
+  # It runs the backend's own manage.py, so it needs the backend's code.
+  migrate:
+    image: rmit-api:local
+    command: python manage.py migrate --noinput
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      DATABASE_URL: postgres://rmit:rmit@db:5432/rmit_store
+      SECRET_KEY: dev-only-not-a-real-secret
+      USE_S3: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+    # Do not restart this one. It is a job: exiting is success, not a crash.
+    restart: "no"
+
+  # --- API -------------------------------------------------------------------
+  api:
+    # Built by the `docker build --target runtime` command in the header.
+    # `--target runtime` is compulsory: stage `test` sits at the end of
+    # api.Dockerfile, and Docker uses the LAST stage when no target is given.
+    image: rmit-api:local
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      DATABASE_URL: postgres://rmit:rmit@db:5432/rmit_store
+      SECRET_KEY: dev-only-not-a-real-secret
+      USE_S3: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # The image already has a HEALTHCHECK, but it probes /healthz/, which only
+    # says the process is alive. Here we want /readyz/, which also checks the
+    # database, because client should wait until the API can actually serve.
+    # urlopen raises an error on a 503, so the check fails on its own.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    # No ports here on purpose. The API is reached through the client's nginx.
+    # Publishing a fixed host port would make `--scale api=2` fail with
+    # "port is already allocated". To reach it directly: docker compose exec api
+
+  # --- Frontend --------------------------------------------------------------
+  client:
+    image: rmit-client:local
+    environment:
+      # Same origin as the page itself, so the browser never makes a
+      # cross-origin request and CORS does not apply at all.
+      API_BASE_URL: /api
+    volumes:
+      # The config inside the image only serves static files, which is correct
+      # for Plan D's two hosts. Here nginx also proxies /api to the api service.
+      - ./docker/client-nginx-compose.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+
+  # CASE USE_S3=FALSE, you will find that if you run with api scale=2
+  # 2 containers will be running, but only one of them will be able to serve media files if someone uploads a file. 
+  # This is because 2 replicas of the api service doesn't meet the source of truth for media files, which is volume media
+  # Solution 1: Create volume media, then state in the api service to mount the volume media to /srv/app/media
+  # media:
+  # on api service, add the following lines:
+  #   volumes:
+  #     - media:/srv/app/media
+  #
+  # Solution 2: Use S3 to store media files, then all replicas of the api service can serve media files from S3.

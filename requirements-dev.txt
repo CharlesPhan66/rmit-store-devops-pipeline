@@ -1,0 +1,18 @@
+# Author: Charles Phan (s4131861)
+# Inherit the base requirements from the main requirements file to ensure consistency across environments.
+-r app/server/requirements.txt
+
+# Then add development-specific dependencies for testing and development purposes.
+# Runner to execute tests
+pytest>=8.0
+
+# Runner to execute Django tests
+pytest-django>=4.8
+
+pytest-cov>=5.0
+
+# Mock object library for testing
+factory-boy>=3.3
+
+# Used for smoke tests to make HTTP requests to the API endpoints
+requests>=2.32

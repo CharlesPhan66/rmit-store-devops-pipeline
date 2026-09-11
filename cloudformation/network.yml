@@ -1,0 +1,553 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  RMIT Store - network and security policy.
+  Deploy first. Everything else imports from here.
+
+# The structure after running this stack is:
+# VPC
+# ├── 2 public subnets
+# ├── 2 private subnets
+# ├── Internet Gateway
+# ├── Route tables
+# └── Security Groups
+# Other files depend on this stack:
+# network.yml: Network and security policy
+#     ↓
+# bootstrap.yml: Ansible control node
+#     ↓
+# data.yml: RDS, S3, ECR
+#     ↓
+# compute.yml: Jenkins, staging host, Swarm cluster and load balancer
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: rmit-store
+    Description: Prefix for resource names
+
+  AdminCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: >
+      Your own address for SSH and the Jenkins UI. 0.0.0.0/0 works but exposes
+      both to the internet; narrow it to <your-ip>/32 when you can.
+
+Resources:
+
+  # VPC and subnets
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      # Allow DNS resolution and hostnames so that the Swarm cluster can use the
+      # internal AWS DNS to reach the RDS instance by name.
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-vpc"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-igw"
+
+  # Attach the IGW to the VPC so that the public subnets can reach the internet.
+  # VPC ──────────────────
+  #                       ├──── VPCGatewayAttachment
+  # InternetGateway ──────
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Two AZs because the load balancer requires it, even when every instance
+  # sits in one of them.
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-public-1"
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-public-2"
+
+  # These hold the RDS subnet group and nothing else. No route out, on purpose:
+  # that is what lets us skip the NAT gateway.
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-private-1"
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.4.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-private-2"
+
+  # Routing
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-public-rt"
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # No default route here. Anything placed in these subnets can reach the VPC
+  # and nothing else.
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-private-rt"
+
+  PrivateSubnet1RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  # ===================================================================
+  # Security groups
+  #
+  # We create sg in this file to set them up at early stage, so that other stacks can reference them
+  # Sources are other security groups, not CIDR ranges. "Anything in
+  # 10.0.0.0/16" would also let a compromised Jenkins host join the Swarm
+  # cluster; "anything carrying swarm-sg" would not.
+  #
+  # Declared in dependency order. A group can reference one defined above it
+  # inline; a rule whose source is the group ITSELF has to be a separate
+  # SecurityGroupIngress resource, because CloudFormation will not let a
+  # resource reference itself.
+  # ===================================================================
+
+  # Alb security group:
+  # Port: 80
+
+  AlbSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public entry point
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-alb-sg"
+
+  AnsibleSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Ansible control node
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AdminCidr
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-ansible-sg"
+
+  # Jenkins security group:
+  # Port: 8080
+  # Source:
+  #  - AdminCidr: for human access to the UI
+  # Port: 22
+  # Source:
+  #  - AdminCidr: for human SSH access
+  #  - AnsibleSg: for Ansible to configure the Jenkins host
+  JenkinsSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Jenkins controller
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AdminCidr
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref AnsibleSg
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: !Ref AdminCidr
+        # GitHub's webhook senders, so a push triggers a build instead of
+        # Jenkins polling every two minutes. These four ranges are the IPv4
+        # entries of the "hooks" array in https://api.github.com/meta - GitHub
+        # publishes them precisely so they can be allowed like this. They change
+        # rarely; a webhook that suddenly stops arriving is worth re-checking
+        # against that endpoint.
+        #
+        # Listing them beats opening 8080 to 0.0.0.0/0: the Jenkins UI has no
+        # TLS in front of it, so a wide-open port would put an admin login on
+        # the public internet in plaintext.
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 192.30.252.0/22
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 185.199.108.0/22
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 140.82.112.0/20
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 143.55.64.0/20
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-jenkins-sg"
+
+  # Staging security group:
+  # Port: 22
+  # Source:
+  #  - AdminCidr: for human SSH access
+  #  - AnsibleSg: for Ansible to configure the staging host
+  #  - JenkinsSg: for Jenkins to deploy to staging host
+  # Port: 8081
+  # Source:
+  #  - AdminCidr: for human access to the staging host's web UI
+  StagingSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Staging host running the Compose stack
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AdminCidr
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref AnsibleSg
+        # Jenkins deploys here over SSH.
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref JenkinsSg
+        - IpProtocol: tcp
+          FromPort: 8081
+          ToPort: 8081
+          CidrIp: !Ref AdminCidr
+        # The Smoke staging stage runs pytest from a container on the Jenkins
+        # host with --network host, so the request arrives carrying JenkinsSg.
+        # Without this the stage fails with a connect TIMEOUT rather than a
+        # refusal - the packets are dropped, so nothing on staging ever sees
+        # them and its logs stay empty, which sends you debugging the wrong box.
+        - IpProtocol: tcp
+          FromPort: 8081
+          ToPort: 8081
+          SourceSecurityGroupId: !Ref JenkinsSg
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-staging-sg"
+
+  # Docker Swarm security group:
+  # Port 22:
+  # Source:
+  # - AdminCidr: for human SSH access
+  # - AnsibleSg: for Ansible to configure the Swarm nodes
+  # - JenkinsSg: for Jenkins to deploy to the Swarm nodes
+  # Port 80:
+  # Source:
+  # - AlbSg: for the load balancer to distribute requests to the Swarm nodes
+  # 2 ports below are pending, not touched
+  # Port 3000:
+  # Source:
+  # - AdminCidr: for human access to the Prometheus UI
+  # Port 9090:
+  # Source:
+  # - AdminCidr: for human access to the Grafana UI
+  SwarmSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Docker Swarm cluster
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AdminCidr
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref AnsibleSg
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref JenkinsSg
+        # Only the load balancer reaches port 80. The nodes sit in a public
+        # subnet but are not on the public internet.
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref AlbSg
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: !Ref AdminCidr
+        - IpProtocol: tcp
+          FromPort: 9090
+          ToPort: 9090
+          CidrIp: !Ref AdminCidr
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-swarm-sg"
+
+  # Swarm's own four ports, source = this same group
+  # 7946 needs BOTH tcp and udp. Missing 4789/udp is the nastiest failure in
+  # the whole project: the cluster reports Ready, services run, and containers
+  # on different nodes cannot reach each other - no error, only timeouts.
+
+  # Inbound rules for the Swarm cluster's own ports. These are separate resources
+  # because CloudFormation will not let a resource reference itself inline.
+  # Port 2377
+  # Source: itself to allow new nodes to join the cluster
+  SwarmIngressManagement:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SwarmSg
+      IpProtocol: tcp
+      FromPort: 2377
+      ToPort: 2377
+      SourceSecurityGroupId: !Ref SwarmSg
+
+  # Port 7946
+  # Source: itself to allow nodes to gossip about the cluster state
+  SwarmIngressGossipTcp:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SwarmSg
+      IpProtocol: tcp
+      FromPort: 7946
+      ToPort: 7946
+      SourceSecurityGroupId: !Ref SwarmSg
+
+  # port 7946 udp
+  # source: itself to allow nodes to gossip about the cluster state
+  SwarmIngressGossipUdp:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SwarmSg
+      IpProtocol: udp
+      FromPort: 7946
+      ToPort: 7946
+      SourceSecurityGroupId: !Ref SwarmSg
+
+  # Port 4789/udp for the overlay network
+  # source: itself to allow containers on different nodes to reach each other
+  SwarmIngressOverlay:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SwarmSg
+      IpProtocol: udp
+      FromPort: 4789
+      ToPort: 4789
+      SourceSecurityGroupId: !Ref SwarmSg
+
+  # Status: Untouched
+  # Node exporter, scraped from inside the cluster only.
+  # Port 9100/tcp
+  # Source: itself to allow Prometheus to scrape metrics from all nodes
+  SwarmIngressNodeExporter:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SwarmSg
+      IpProtocol: tcp
+      FromPort: 9100
+      ToPort: 9100
+      SourceSecurityGroupId: !Ref SwarmSg
+
+  # Database
+  # Reachable only from the two groups that actually query it. Because every
+  # group lives in this stack, no other template has to add ingress here.
+
+  # The database is in a private subnet, so it cannot be reached from the
+  # internet. The Swarm cluster and the staging host can reach it because they
+  # are in the same VPC and have security groups that allow it. The database
+  # does not need to reach anything else, so it has no outbound rules.
+  # Port 5432
+  # Source:
+  # - SwarmSg: for the Swarm cluster to reach the database
+  # - StagingSg: for the staging host to reach the database
+  DbSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RMIT Store database
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref SwarmSg
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref StagingSg
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-db-sg"
+
+# Returned values for other stacks to import. The names are the same as the
+# resource names, but the values are the resource IDs. The other stacks do not
+# need to know the VPC CIDR or the subnet CIDRs, only the IDs.
+Outputs:
+  # Other stacks can import by name
+  # compute.yml may use !ImportValue to get the VPC ID, subnetIDs, and security group IDs. The names are the same as the resource names, but the values are the resource IDs.
+
+  # Import by:
+  # !ImportValue
+  #   Fn::Sub: "${NetworkStackName}-VpcId"
+  VpcId:
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VpcId"
+
+  # Import by:
+  # !ImportValue
+  #   Fn::Sub: "${NetworkStackName}-PublicSubnet1"
+  PublicSubnet1:
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnet1"
+
+  # Import by:
+  # !ImportValue
+  #   Fn::Sub: "${NetworkStackName}-PublicSubnet2"
+  PublicSubnet2:
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnet2"
+
+  # Import by:
+  # !ImportValue
+  #   Fn::Sub: "${NetworkStackName}-PrivateSubnet1"
+  PrivateSubnet1:
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnet1"
+
+  # Import by:
+  # !ImportValue
+  #   Fn::Sub: "${NetworkStackName}-PrivateSubnet2"
+  PrivateSubnet2:
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnet2"
+
+  # Import by:
+  # !ImportValue
+  #   Fn::Sub: "${NetworkStackName}-AlbSg"
+  AlbSg:
+    Value: !Ref AlbSg
+    Export:
+      Name: !Sub "${AWS::StackName}-AlbSg"
+
+  # Import by:
+  # !ImportValue
+  #   Fn::Sub: "${NetworkStackName}-AnsibleSg"
+  AnsibleSg:
+    Value: !Ref AnsibleSg
+    Export:
+      Name: !Sub "${AWS::StackName}-AnsibleSg"
+
+  # Import by:
+  # !ImportValue
+  #   Fn::Sub: "${NetworkStackName}-JenkinsSg"
+  JenkinsSg:
+    Value: !Ref JenkinsSg
+    Export:
+      Name: !Sub "${AWS::StackName}-JenkinsSg"
+
+  # Import by:
+  # !ImportValue
+  #   Fn::Sub: "${NetworkStackName}-StagingSg"
+  StagingSg:
+    Value: !Ref StagingSg
+    Export:
+      Name: !Sub "${AWS::StackName}-StagingSg"
+
+  # Import by:
+  # !ImportValue
+  #   Fn::Sub: "${NetworkStackName}-SwarmSg"
+  SwarmSg:
+    Value: !Ref SwarmSg
+    Export:
+      Name: !Sub "${AWS::StackName}-SwarmSg"
+
+  # Import by:
+  # !ImportValue
+  #   Fn::Sub: "${NetworkStackName}-DbSg"
+  DbSg:
+    Value: !Ref DbSg
+    Export:
+      Name: !Sub "${AWS::StackName}-DbSg"
