@@ -112,14 +112,14 @@ WORKDIR /repo
 
 # Copy the requirements-dev.txt file with the same structure as the source code into the image to ensure the requirements-dev refers to the correct location of the requirements.txt file
 COPY app/server/requirements.txt app/server/requirements.txt
-COPY requirements-dev.txt .
+COPY tests/backend/requirements-dev.txt requirements-dev.txt
 RUN pip install -r requirements-dev.txt
 
 # Copy the source code
 COPY app/server/ app/server/
 
 # Because they sit outside the app/server folder
-COPY pytest.ini ./
+COPY tests/backend/pytest.ini ./pytest.ini
 COPY tests/ tests/
 
 CMD ["pytest"]
