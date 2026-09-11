@@ -1,0 +1,28 @@
+---
+- name: Validate the expected G1 inventory
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Require the deployment host groups
+      ansible.builtin.assert:
+        that:
+          - groups['tag_Role_staging'] | default([]) | length == 1
+          - groups['tag_Role_swarm_manager'] | default([]) | length == 1
+          - groups['tag_Role_swarm_worker'] | default([]) | length >= 2
+        fail_msg: >-
+          Dynamic inventory could not identify the staging, Swarm manager and
+          worker hosts. Check EC2 Name/Role tags and AWS access.
+
+- name: Verify Ansible connectivity to every managed host
+  hosts: tag_Role_staging:tag_Role_swarm_manager:tag_Role_swarm_worker
+  gather_facts: true
+  tasks:
+    - name: Ping the host through Ansible
+      ansible.builtin.ping:
+
+    - name: Display the resolved host information
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} -> {{ ansible_host }};
+          {{ ansible_distribution }} {{ ansible_distribution_version }}
