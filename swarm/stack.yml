@@ -7,6 +7,8 @@ services:
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.prod
       ALLOWED_HOSTS: "${ALB_DNS},127.0.0.1"
+      CLIENT_URL: "http://${ALB_DNS}"
+      CSRF_TRUSTED_ORIGINS: "http://${ALB_DNS}"
       USE_S3: "True"
       AWS_STORAGE_BUCKET_NAME: "${MEDIA_BUCKET}"
       AWS_S3_REGION_NAME: "${AWS_REGION}"
