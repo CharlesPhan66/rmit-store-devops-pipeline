@@ -1,7 +1,0 @@
----
-swarm_manager_group: tag_Role_swarm_manager
-swarm_worker_group: tag_Role_swarm_worker
-swarm_manager_port: 2377
-swarm_secret_parameters:
-  SECRET_KEY: /rmit/prod/SECRET_KEY
-  DATABASE_URL: /rmit/prod/DATABASE_URL

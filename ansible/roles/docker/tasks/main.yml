@@ -1,94 +1,71 @@
 ---
-- name: Install Docker and supporting packages
+# This replaces the user data script that is used when launching the EC2 instance manually.
+- name: Install packages
   ansible.builtin.dnf:
-    name: "{{ docker_packages }}"
+    name:
+      - docker
+      - git
+      - amazon-ecr-credential-helper
     state: present
 
-- name: Enable and start Docker
+- name: Enable and start docker service
   ansible.builtin.systemd:
-    name: "{{ docker_service_name }}"
+    name: docker
     enabled: true
     state: started
 
-- name: Add deployment users to the Docker group
-  ansible.builtin.user:
-    name: "{{ item }}"
-    groups: "{{ docker_group_name }}"
-    append: true
-  loop: "{{ docker_users }}"
-
-- name: Preserve the configured hostname after reboot
-  ansible.builtin.lineinfile:
-    path: /etc/cloud/cloud.cfg
-    regexp: '^preserve_hostname:'
-    line: 'preserve_hostname: true'
-    create: true
-    mode: "0644"
-  when: docker_manage_hostname | bool
-
-- name: Set the hostname from the EC2 Name tag
-  ansible.builtin.hostname:
-    name: "{{ inventory_hostname }}"
-  when: docker_manage_hostname | bool
-
-- name: Create Docker configuration directories
-  ansible.builtin.file:
-    path: "/home/{{ item }}/.docker"
-    state: directory
-    owner: "{{ item }}"
-    group: "{{ item }}"
-    mode: "0700"
-  loop: "{{ docker_users }}"
-  when: docker_configure_ecr_helper | bool
-
-- name: Configure the Amazon ECR credential helper
-  ansible.builtin.copy:
-    dest: "/home/{{ item }}/.docker/config.json"
-    content: |
-      {
-        "credsStore": "ecr-login"
-      }
-    owner: "{{ item }}"
-    group: "{{ item }}"
-    mode: "0600"
-  loop: "{{ docker_users }}"
-  when: docker_configure_ecr_helper | bool
-
-- name: Create the root Docker configuration directory
-  ansible.builtin.file:
-    path: /root/.docker
-    state: directory
-    owner: root
-    group: root
-    mode: "0700"
-  when: docker_configure_ecr_helper | bool
-
-- name: Configure the Amazon ECR credential helper for automated deployments
-  ansible.builtin.copy:
-    dest: /root/.docker/config.json
-    content: |
-      {
-        "credsStore": "ecr-login"
-      }
-    owner: root
-    group: root
-    mode: "0600"
-  when: docker_configure_ecr_helper | bool
 
 - name: Create the Docker CLI plugin directory
   ansible.builtin.file:
-    path: "{{ docker_compose_plugin_dir }}"
+    path: /usr/libexec/docker/cli-plugins
     state: directory
-    owner: root
-    group: root
-    mode: "0755"
-  when: docker_install_compose_plugin | bool
+    mode: '0755'
 
-- name: Install the Docker Compose CLI plugin
+- name: Look for the Compose plugin
+  ansible.builtin.stat:
+    path: /usr/libexec/docker/cli-plugins/docker-compose
+  register: compose_plugin
+
+- name: Install the Compose plugin
   ansible.builtin.get_url:
-    url: "{{ docker_compose_url }}"
-    dest: "{{ docker_compose_plugin_dir }}/docker-compose"
-    owner: root
-    group: root
-    mode: "0755"
-  when: docker_install_compose_plugin | bool
+    url: "https://github.com/docker/compose/releases/download/v{{ docker_compose_version }}/docker-compose-linux-{{ ansible_architecture }}"
+    dest: /usr/libexec/docker/cli-plugins/docker-compose
+    mode: '0755'
+  when: not compose_plugin.stat.exists
+
+- name: Add ec2-user to the docker group
+  ansible.builtin.user:
+    name: ec2-user
+    groups: docker
+    append: true
+
+- name: Keep the hostname across reboots
+  ansible.builtin.lineinfile:
+    path: /etc/cloud/cloud.cfg
+    line: "preserve_hostname: true"
+    create: true
+
+- name: Set the hostname for the Name tag of the instance
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+
+# copy does not create parent directories, and a fresh AL2023 box has no
+# ~/.docker until something writes to it.
+- name: Create ec2-user's Docker config directory
+  ansible.builtin.file:
+    path: /home/ec2-user/.docker
+    state: directory
+    owner: ec2-user
+    group: ec2-user
+    mode: '0700'
+
+- name: Point Docker at the ECR credential helper
+  ansible.builtin.copy:
+    dest: /home/ec2-user/.docker/config.json
+    content: |
+      {
+        "credsStore": "ecr-login"
+      }
+    owner: ec2-user
+    group: ec2-user
+    mode: "0600"

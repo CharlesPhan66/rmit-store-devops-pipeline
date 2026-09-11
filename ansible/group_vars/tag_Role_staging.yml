@@ -1,12 +1,32 @@
 ---
-app_deploy_user: ec2-user
-app_deploy_group: ec2-user
-app_deploy_dir: /home/ec2-user/deploy
+# Variables for the staging host (Role=staging).
+# Values come from inventory or SSM, so they survive instance rebuilds.
 
-app_ssm_prefix: /rmit/staging
-app_secret_key_parameter: "{{ app_ssm_prefix }}/SECRET_KEY"
-app_database_url_parameter: "{{ app_ssm_prefix }}/DATABASE_URL"
-app_media_bucket_parameter: "{{ app_ssm_prefix }}/MEDIA_BUCKET"
 
-app_allowed_hosts: "{{ ansible_host }},127.0.0.1,localhost"
-app_client_url: "http://{{ ansible_host }}:8081"
+ssm_prefix: /rmit/staging
+
+# Jenkins copies Compose files here; Ansible writes compose.env.
+deploy_dir: /home/ec2-user/deploy
+
+# Required by seed_demo and create_admin.
+admin_email: admin@rmit.edu.au
+
+# Staging database on the shared RDS instance.
+staging_db: rmit_staging
+db_master_user: rmit
+
+# Allow Jenkins, browsers, and local container health checks.
+allowed_hosts: "{{ ansible_host }},{{ public_ip_address | default(ansible_host) }},127.0.0.1,localhost"
+
+# Public URL used by browsers and password-reset links.
+client_url: "http://{{ public_ip_address | default(ansible_host) }}:8081"
+
+# Allow Django admin requests from both staging addresses.
+csrf_trusted_origins: "http://{{ public_ip_address | default(ansible_host) }}:8081,http://{{ ansible_host }}:8081"
+
+# Separate staging bucket prevents seed data from affecting production media.
+media_bucket: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/MEDIA_BUCKET', region=aws_region) }}"
+
+# Shared sender address for app emails and Jenkins alerts.
+# The address is public; its App Password is stored separately as a secret.
+email_address: "{{ lookup('amazon.aws.aws_ssm', '/rmit/EMAIL_ADDRESS', region=aws_region) }}"

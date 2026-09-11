@@ -1,8 +1,0 @@
----
-app_deploy_user: ec2-user
-app_deploy_group: ec2-user
-app_deploy_dir: /home/ec2-user/deploy
-app_runtime_packages:
-  - python3.11
-  - python3.11-pip
-  - postgresql16

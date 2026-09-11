@@ -20,8 +20,8 @@
       ansible.builtin.stat:
         path: "{{ item }}"
       loop:
-        - "{{ app_deploy_dir }}/compose.env"
-        - "{{ app_deploy_dir }}/docker"
+        - "{{ deploy_dir }}/compose.env"
+        - "{{ deploy_dir }}/docker"
       register: app_deployment_files
 
     - name: Require generated deployment files
@@ -67,7 +67,14 @@
       changed_when: false
 
     - name: Require every configured production secret
+      vars:
+        # Kept in step with the loop in roles/swarm/tasks/main.yml.
+        required_swarm_secrets:
+          - SECRET_KEY
+          - DATABASE_URL
+          - DJANGO_SUPERUSER_PASSWORD
+          - EMAIL_HOST_PASSWORD
       ansible.builtin.assert:
         that:
-          - (swarm_secret_parameters.keys() | difference(deployed_swarm_secrets.stdout_lines)) | length == 0
+          - (required_swarm_secrets | difference(deployed_swarm_secrets.stdout_lines)) | length == 0
         fail_msg: One or more required production Swarm secrets are missing.

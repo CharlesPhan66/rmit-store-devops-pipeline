@@ -1,35 +1,82 @@
 ---
-- name: Install staging runtime packages
-  ansible.builtin.dnf:
-    name: "{{ app_runtime_packages }}"
-    state: present
-
-- name: Create the staging deployment directory
+# The app host receives only the files needed by Compose.
+# Ansible reads secrets from SSM and generates compose.env.
+- name: Create the deploy directory
   ansible.builtin.file:
-    path: "{{ app_deploy_dir }}/docker"
+    path: "{{ deploy_dir }}/docker"
     state: directory
-    owner: "{{ app_deploy_user }}"
-    group: "{{ app_deploy_group }}"
-    mode: "0755"
+    owner: ec2-user
+    group: ec2-user
+    mode: '0755'
 
-- name: Read staging configuration from SSM Parameter Store
+- name: Read configuration from SSM Parameter Store
   ansible.builtin.set_fact:
-    app_secret_key: >-
-      {{ lookup('amazon.aws.aws_ssm', app_secret_key_parameter,
-                region=aws_region, decrypt=true) }}
-    app_database_url: >-
-      {{ lookup('amazon.aws.aws_ssm', app_database_url_parameter,
-                region=aws_region, decrypt=true) }}
-    app_media_bucket: >-
-      {{ lookup('amazon.aws.aws_ssm', app_media_bucket_parameter,
-                region=aws_region) }}
+    secret_key: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/SECRET_KEY', decrypt=true, region=aws_region) }}"
+    database_url: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/DATABASE_URL', decrypt=true, region=aws_region) }}"
+    admin_password: "{{ lookup('amazon.aws.aws_ssm', ssm_prefix ~ '/ADMIN_PASSWORD', decrypt=true, region=aws_region) }}"
+    email_password: "{{ lookup('amazon.aws.aws_ssm', '/rmit/EMAIL_PASSWORD', decrypt=true, region=aws_region) }}"
+    rds_endpoint: "{{ lookup('amazon.aws.aws_ssm', '/rmit/RDS_ENDPOINT', region=aws_region) }}"
+    rds_master_password: "{{ lookup('amazon.aws.aws_ssm', '/rmit/RDS_MASTER_PASSWORD', decrypt=true, region=aws_region) }}"
   no_log: true
 
-- name: Render the staging Compose environment file
+# Query the postgres maintenance database because a database cannot create itself.
+# Pass PGPASSWORD through the environment to keep it out of argv and process listings.
+- name: Look for the staging database on RDS
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - -e
+      - PGPASSWORD
+      - postgres:16-alpine
+      - psql
+      - -h
+      - "{{ rds_endpoint }}"
+      - -U
+      - "{{ db_master_user }}"
+      - -d
+      - postgres
+      - -tAc
+      - "SELECT 1 FROM pg_database WHERE datname = '{{ staging_db }}'"
+  environment:
+    PGPASSWORD: "{{ rds_master_password }}"
+  register: staging_db_exists
+  changed_when: false
+  no_log: true
+
+# CREATE DATABASE is run separately because it cannot run inside a transaction.
+- name: Create the staging database on RDS
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - -e
+      - PGPASSWORD
+      - postgres:16-alpine
+      - psql
+      - -h
+      - "{{ rds_endpoint }}"
+      - -U
+      - "{{ db_master_user }}"
+      - -d
+      - postgres
+      - -c
+      - "CREATE DATABASE {{ staging_db }}"
+  environment:
+    PGPASSWORD: "{{ rds_master_password }}"
+  when: staging_db_exists.stdout | trim != '1'
+  no_log: true
+
+- name: Render compose.env
   ansible.builtin.template:
     src: compose.env.j2
-    dest: "{{ app_deploy_dir }}/compose.env"
-    owner: "{{ app_deploy_user }}"
-    group: "{{ app_deploy_group }}"
-    mode: "0600"
+    dest: "{{ deploy_dir }}/compose.env"
+    owner: ec2-user
+    group: ec2-user
+    mode: '0600'
   no_log: true
+
+# Theres no need to render deploy.sh anymore
+# Jenkins will scp the required files directly to staging host and run ssh -o to run command

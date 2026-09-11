@@ -1,18 +1,43 @@
 ---
-- name: Configure all container hosts
-  hosts: tag_Role_staging:tag_Role_swarm_manager:tag_Role_swarm_worker
+# Which roles run where. No values live here on purpose: everything
+# environment-specific is in group_vars/, so rebuilding the infrastructure with
+# different addresses does not touch this file.
+#
+#   ansible-playbook site.yml                          # everything
+#   ansible-playbook site.yml --limit tag_Role_staging
+#   ansible-playbook site.yml --check --diff           # dry run
+#
+# Run it twice: the second run must report changed=0.
+- name: Hosts that run containers
+  hosts: all:!tag_Role_ansible
   become: true
   roles:
     - docker
 
-- name: Configure the staging deployment host
+- name: The Jenkins host
+  hosts: tag_Role_jenkins
+  become: true
+  roles:
+    - jenkins
+
+- name: Staging host
   hosts: tag_Role_staging
   become: true
   roles:
     - app
 
-- name: Create the production Docker Swarm
+- name: the swarm cluster
   hosts: tag_Role_swarm_manager:tag_Role_swarm_worker
   become: true
   roles:
     - swarm
+
+- name: Let Jenkins in to the deploy targets
+  hosts: tag_Role_staging:tag_Role_swarm_manager:tag_Role_swarm_worker
+  become: true
+  tasks:
+    - name: Authorise the Jenkins public key for ec2-user
+      ansible.posix.authorized_key:
+        user: ec2-user
+        key: "{{ lookup('amazon.aws.aws_ssm', '/rmit/JENKINS_PUBKEY', region=aws_region) }}"
+        state: present

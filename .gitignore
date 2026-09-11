@@ -117,8 +117,17 @@ CLAUDE.MD
 
 # Planning notes (working documents, not deliverables)
 plan/
+
+# Compose runtime configuration for Plan E option B.
+# Contains SECRET_KEY and the database password.
+compose.env
+
+# Test artifacts
+reports/
+.pytest_cache/
+.coverage
+coverage.xml
+
+# Local ansible inventory overrides, if anyone uses them.
 ansible/inventory/dev.ini
 ansible/inventory/swarm.ini
-
-# Generated deployment configuration contains SSM-provided secrets.
-compose.env

@@ -1,3 +1,2 @@
 ---
-swarm_environment: production
-swarm_ssm_prefix: /rmit/prod
+ssm_prefix: /rmit/prod

@@ -1,102 +1,71 @@
 ---
-- name: Read the local Docker Swarm state
-  ansible.builtin.command:
-    argv:
-      - docker
-      - info
-      - --format
-      - "{% raw %}{{.Swarm.LocalNodeState}}{% endraw %}"
-  register: local_swarm_state
-  changed_when: false
-
-- name: Initialize the production Swarm manager
-  ansible.builtin.command:
-    argv:
-      - docker
-      - swarm
-      - init
-      - --advertise-addr
-      - "{{ ansible_default_ipv4.address }}"
-  when:
-    - inventory_hostname in groups[swarm_manager_group]
-    - local_swarm_state.stdout != 'active'
-  register: swarm_manager_init
-  changed_when: swarm_manager_init.rc == 0
+- name: Initialize swarm on the first manager node
+  ansible.builtin.command: >
+    docker swarm init --advertise-addr {{ ansible_default_ipv4.address }}
+  register: swarm_init
+  changed_when: "'Swarm initialized' in swarm_init.stdout"
+  failed_when:
+    - swarm_init.rc != 0
+    - "'already part of a swarm' not in swarm_init.stderr"
+  when: "'tag_Role_swarm_manager' in group_names"
 
 - name: Read the worker join token from the manager
-  ansible.builtin.command:
-    argv:
-      - docker
-      - swarm
-      - join-token
-      - -q
-      - worker
-  delegate_to: "{{ groups[swarm_manager_group][0] }}"
-  run_once: true
-  register: swarm_worker_token
+  ansible.builtin.command: docker swarm join-token -q worker
+  register: join_token
   changed_when: false
+  delegate_to: "{{ groups['tag_Role_swarm_manager'][0] }}"
+  run_once: true
   no_log: true
 
-- name: Join production workers to the Swarm
-  ansible.builtin.command:
-    argv:
-      - docker
-      - swarm
-      - join
-      - --token
-      - "{{ swarm_worker_token.stdout }}"
-      - "{{ hostvars[groups[swarm_manager_group][0]].ansible_default_ipv4.address }}:{{ swarm_manager_port }}"
-  when:
-    - inventory_hostname in groups[swarm_worker_group]
-    - local_swarm_state.stdout != 'active'
-  register: swarm_worker_join
-  changed_when: swarm_worker_join.rc == 0
+- name: Join the workers
+  ansible.builtin.command: >
+    docker swarm join --token {{ join_token.stdout }} 
+    {{ hostvars[groups['tag_Role_swarm_manager'][0]].ansible_host }}:2377
+  register: swarm_join
+  changed_when: "'This node joined a swarm' in swarm_join.stdout"
+  failed_when:
+    - swarm_join.rc != 0
+    - "'already part of a swarm' not in swarm_join.stderr"
+  when: "'tag_Role_swarm_worker' in group_names"
   no_log: true
 
-- name: Verify the Swarm nodes from the manager
-  ansible.builtin.command:
-    argv:
-      - docker
-      - node
-      - ls
-      - --format
-      - "{% raw %}{{.Hostname}} {{.Status}} {{.ManagerStatus}}{% endraw %}"
-  delegate_to: "{{ groups[swarm_manager_group][0] }}"
-  run_once: true
-  register: swarm_nodes
-  changed_when: false
-
-- name: Display the Swarm membership
-  ansible.builtin.debug:
-    var: swarm_nodes.stdout_lines
-  run_once: true
-
-- name: List the secrets already stored by the Swarm
+# swarm/stack.yml declares SECRET_KEY and DATABASE_URL as external secrets
+- name: List the secrets the swarm already holds
   ansible.builtin.command:
     argv:
       - docker
       - secret
       - ls
       - --format
-      - "{% raw %}{{.Name}}{% endraw %}"
-  register: swarm_existing_secrets
+      - "{% raw %}{{ .Name }}{% endraw %}"
+  register: swarm_secrets
   changed_when: false
-  when: inventory_hostname in groups[swarm_manager_group]
+  when: "'tag_Role_swarm_manager' in group_names"
 
-- name: Create missing production secrets from SSM Parameter Store
+# stdin_add_newline: false avoids a trailing newline: it becomes part of DATABASE_URL and can cause
+# Django to resolve the database hostname incorrectly.
+
+# Secret names must match the environment variables expected by the app.
+# Docker secrets avoid exposing sensitive values in the Swarm raft log,
+# unlike service-level --env variables.
+- name: Create the missing secrets from SSM
   ansible.builtin.command:
     argv:
       - docker
       - secret
       - create
-      - "{{ item.key }}"
+      - "{{ item.name }}"
       - "-"
-    stdin: >-
-      {{ lookup('amazon.aws.aws_ssm', item.value,
-                region=aws_region, decrypt=true) }}
+    stdin: "{{ lookup('amazon.aws.aws_ssm', item.param, decrypt=true, region=aws_region) }}"
     stdin_add_newline: false
-  loop: "{{ swarm_secret_parameters | dict2items }}"
+  loop:
+    - { name: SECRET_KEY, param: /rmit/prod/SECRET_KEY }
+    - { name: DATABASE_URL, param: /rmit/prod/DATABASE_URL }
+    - { name: DJANGO_SUPERUSER_PASSWORD, param: /rmit/prod/ADMIN_PASSWORD }
+    - { name: EMAIL_HOST_PASSWORD, param: /rmit/EMAIL_PASSWORD }
+  loop_control:
+    label: "{{ item.name }}"
   when:
-    - inventory_hostname in groups[swarm_manager_group]
-    - item.key not in (swarm_existing_secrets.stdout_lines | default([]))
+    - "'tag_Role_swarm_manager' in group_names"
+    - item.name not in swarm_secrets.stdout_lines
   no_log: true
