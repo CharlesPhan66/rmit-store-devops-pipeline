@@ -84,10 +84,15 @@ Tom has a working three-tier app (`app/`) and no pipeline. We are the DevOps
 consultancy. We do not restructure his app; we build everything around it so
 that deploying, testing, scaling, observing and rolling back become boring.
 
-**We never edit files under `app/` except where a phase explicitly says so.**
-Adding tests and a `requirements-dev.txt` is the only sanctioned intrusion, and
-even those live in their own directories. Everything else we build sits at the
-repo root beside `app/`.
+**We never create or edit a single file under `app/`. Not one — not even a
+test.** Tom's app is vendored upstream source. Every artifact we produce sits at
+the repo root beside it: `requirements-dev.txt`, `pytest.ini`, `conftest.py`,
+`tests/`, `Jenkinsfile`, `ansible/`, `cloudformation/`, `docker/`, `swarm/`.
+
+The test of whether the rule is being kept: `rm -rf app/`, re-vendor a newer
+version of Tom's app, and **nothing of ours is lost**. That is the whole reason
+the rule exists, and it is also what makes `git diff app/` a one-line proof for
+the report that we changed none of his code.
 
 ---
 
@@ -238,7 +243,7 @@ right answer is to build in CI and ship only the resulting image.
 
 ```
 .
-├── app/                     # Tom's app — untouched except tests/requirements-dev.txt
+├── app/                     # Tom's app — vendored upstream, we add nothing
 ├── tests/
 │   ├── e2e/                 # Playwright specs (journeys A–F)
 │   └── smoke/               # post-deploy probe checks

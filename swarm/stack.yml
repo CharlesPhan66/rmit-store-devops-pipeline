@@ -1,0 +1,83 @@
+version: "3.8"
+
+services:
+
+  api:
+    image: ${ECR}/rmit-api:${GIT_SHA}
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.prod
+      ALLOWED_HOSTS: "${ALB_DNS},127.0.0.1"
+      CLIENT_URL: "http://${ALB_DNS}"
+      CSRF_TRUSTED_ORIGINS: "http://${ALB_DNS}"
+      USE_S3: "True"
+      AWS_STORAGE_BUCKET_NAME: "${MEDIA_BUCKET}"
+      AWS_S3_REGION_NAME: "${AWS_REGION}"
+      GIT_COMMIT: ${GIT_SHA}
+      EMAIL_BACKEND: django.core.mail.backends.smtp.EmailBackend
+      EMAIL_HOST: smtp.gmail.com
+      EMAIL_PORT: "587"
+      EMAIL_USE_TLS: "True"
+      EMAIL_HOST_USER: "${EMAIL_ADDRESS}"
+      DEFAULT_FROM_EMAIL: "RMIT Store <${EMAIL_ADDRESS}>"
+    secrets:
+      - SECRET_KEY
+      - DATABASE_URL
+      - EMAIL_HOST_PASSWORD
+    networks: [rmit]
+    deploy:
+      replicas: 3  # Tính luôn manager node
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+        monitor: 30s
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+  
+  client:
+    image: ${ECR}/rmit-client:${GIT_SHA}
+    environment:
+      API_BASE_URL: /api
+    configs:
+      - source: nginx-conf
+        target: /etc/nginx/conf.d/default.conf
+    ports:
+      - "80:80"
+    networks: [rmit]
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        order: start-first
+
+secrets:
+  # External: Swarm doesn't create it in run-time, it must be created in the swarm manager first by ansible task. The secret's value is read from SSM and passed to the swarm manager.
+  SECRET_KEY:
+    external: true
+  DATABASE_URL:
+    external: true
+  EMAIL_HOST_PASSWORD:
+    external: true
+
+# This is the same as bind mounting a file in docker-compose
+configs:
+  nginx-conf:
+    file: ../docker/client-nginx-compose.conf
+
+# In compose, networks are created automatically
+# In swarm, cuz you have multiple instances as nodes, you need to create an overlay network for the services to communicate across nodes
+networks:
+  rmit:
+    driver: overlay
