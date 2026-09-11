@@ -218,6 +218,13 @@ pipeline {
         stage('Migrate and seed prod') {
             steps {
                 sh """
+                    aws s3api delete-public-access-block --bucket ${env.MEDIA_BUCKET} || true
+                    
+                    aws s3api put-bucket-policy \
+                        --bucket ${env.MEDIA_BUCKET} \
+                        --policy "{\\\"Version\\\":\\\"2008-10-17\\\",\\\"Statement\\\":[{\\\"Sid\\\":\\\"PublicReadMediaBucket\\\",\\\"Effect\\\":\\\"Allow\\\",\\\"Principal\\\":\\\"*\\\",\\\"Action\\\":\\\"s3:GetObject\\\",\\\"Resource\\\":\\\"arn:aws:s3:::${env.MEDIA_BUCKET}/media/*\\\"}]}"
+                """
+                sh """
                     ssh -o StrictHostKeyChecking=no ${SWARM_MGR} '
                         set -e
                         docker service rm rmit-migrate 2>/dev/null || true
