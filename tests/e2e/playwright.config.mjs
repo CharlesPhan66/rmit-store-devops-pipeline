@@ -1,3 +1,6 @@
+// Author: @danzelexp2713 (danzel)
+// Last updated: 11/9/2026
+
 import { defineConfig, devices } from "@playwright/test";
 import path from "path";
 import { fileURLToPath } from "url";

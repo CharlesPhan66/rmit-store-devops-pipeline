@@ -1,3 +1,6 @@
+// Author: @danzelexp2713 (danzel)
+// Last updated: 11/9/2026
+
 import { describe, it, expect, beforeEach } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useCartStore } from "@/stores/cart";

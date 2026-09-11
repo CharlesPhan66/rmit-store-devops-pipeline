@@ -1,3 +1,6 @@
+# Author: @danzelexp2713 (danzel)
+# Last updated: 11/9/2026
+
 # Import all configurations from the upstream app
 from config.settings.dev import *
 

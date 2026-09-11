@@ -1,3 +1,6 @@
+# Author: @danzelexp2713 (danzel)
+# Last updated: 11/9/2026
+
 import pytest
 from rest_framework.test import APIClient
 from rest_framework import status
