@@ -1,0 +1,14 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Check the CloudFormation permissions in Learner Lab
+
+Resources:
+  Marker:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /rmit/smoke-test
+      Type: String
+      Value: it-works
+
+Outputs:
+  MarkerName:
+    Value: !Ref Marker

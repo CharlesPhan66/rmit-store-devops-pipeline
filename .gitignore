@@ -117,3 +117,13 @@ CLAUDE.MD
 
 # Planning notes (working documents, not deliverables)
 plan/
+
+# Compose runtime configuration for Plan E option B.
+# Contains SECRET_KEY and the database password.
+compose.env
+
+# Test artifacts
+reports/
+.pytest_cache/
+.coverage
+coverage.xml

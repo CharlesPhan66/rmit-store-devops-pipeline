@@ -1,3 +1,5 @@
+// Author: @CharlesPhan66 (Charles Phan)
+// Last updated: 2/9/2026
 pipeline {
     agent any
 
@@ -7,30 +9,37 @@ pipeline {
     }
 
     stages {
-
+        // Every address comes from SSM, so rebuilding the CloudFormation stacks
+        // with new IPs needs no edit here.
         stage('Resolve environment') {
             steps {
                 script {
-                    env.CURRENT_STAGE = 'Resolve environment'
                     def ssm = { name ->
                         sh(script: "aws ssm get-parameter --name ${name} --query Parameter.Value --output text", returnStdout: true).trim()
                     }
-                    env.AWS_REGION  = 'us-east-1'
+                    def stagingIp = ssm('/rmit/staging/PRIVATE_IP')
+
                     env.ECR         = ssm('/rmit/ECR_REGISTRY')
-                    env.STAGING     = "ec2-user@" + ssm('/rmit/staging/PRIVATE_IP')
-                    env.STAGING_URL = "http://" + ssm('/rmit/staging/PRIVATE_IP') + ":8081"
+                    env.STAGING     = "ec2-user@${stagingIp}"
+                    env.STAGING_URL = "http://${stagingIp}:8081"
                     env.SWARM_MGR   = "ec2-user@" + ssm('/rmit/prod/SWARM_MGR_IP')
-                    env.PROD_URL    = "http://" + ssm('/rmit/prod/ALB_DNS')
-                    echo "ecr=${env.ECR} staging=${env.STAGING_URL} prod=${env.PROD_URL}"
+
+                    env.ALB_DNS      = ssm('/rmit/prod/ALB_DNS')
+                    env.MEDIA_BUCKET = ssm('/rmit/prod/MEDIA_BUCKET')
+                    env.PROD_URL     = "http://${env.ALB_DNS}"
+
+                    env.EMAIL_ADDRESS = ssm('/rmit/EMAIL_ADDRESS')
+
+                    env.AWS_REGION  = env.ECR.split('\\.')[3]
+
+                    echo "staging=${env.STAGING_URL} prod=${env.PROD_URL} registry=${env.ECR}"
                 }
             }
         }
-
         stage('Checkout') {
             steps {
-                script { env.CURRENT_STAGE = 'Checkout' }
                 checkout scm
-                sh 'rm -rf test-reports && mkdir -p test-reports'
+                sh 'rm -rf reports && mkdir -p reports'
                 script {
                     env.SHA = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
                 }
@@ -40,40 +49,34 @@ pipeline {
 
         stage('Build images') {
             steps {
-                script { env.CURRENT_STAGE = 'Build images' }
                 sh """
-                    docker build -t rmit-api:${env.SHA} app/server
-                    docker build -t rmit-client:${env.SHA} app/client
+                    docker build -f docker/api.Dockerfile --target runtime \
+                        --build-arg GIT_COMMIT=${env.SHA} \
+                        -t rmit-api:${env.SHA} .
+                    docker build -f docker/client.Dockerfile \
+                        -t rmit-client:${env.SHA} .
                 """
             }
         }
 
-        stage('Backend tests') {
+        stage('Test') {
             steps {
-                script { env.CURRENT_STAGE = 'Backend tests' }
+                sh "docker build -f docker/api.Dockerfile --target test -t rmit-api:test-${env.SHA} ."
+                sh "mkdir -p reports"
                 sh """
                     docker network create ci-${env.BUILD_NUMBER} || true
-                    docker run -d --name ci-db-${env.BUILD_NUMBER} \\
-                        --network ci-${env.BUILD_NUMBER} \\
-                        -e POSTGRES_USER=rmit \\
-                        -e POSTGRES_PASSWORD=rmit \\
-                        -e POSTGRES_DB=rmit_store \\
-                        postgres:16
-
-                    echo 'Waiting for test database to accept connections...'
-                    for i in \$(seq 1 15); do
-                        docker exec ci-db-${env.BUILD_NUMBER} pg_isready -U rmit && break
-                        sleep 2
-                    done
-
-                    docker run --rm --network ci-${env.BUILD_NUMBER} \\
-                        -e DATABASE_URL=postgres://rmit:rmit@ci-db-${env.BUILD_NUMBER}:5432/rmit_store \\
-                        -e SECRET_KEY=jenkins-test-key \\
-                        -e ALLOWED_HOSTS=localhost,127.0.0.1 \\
-                        -e DJANGO_SETTINGS_MODULE=ci_test_settings \\
-                        -v "\$(pwd)/test-reports:/app/test-reports" \\
-                        --entrypoint sh rmit-api:${env.SHA} \\
-                        -c "pip install --quiet unittest-xml-reporting && python manage.py test apps.orders apps.catalog apps.core"
+                    docker run -d --name ci-db-${env.BUILD_NUMBER} \
+                        --network ci-${env.BUILD_NUMBER} \
+                        -e POSTGRES_USER=rmit \
+                        -e POSTGRES_PASSWORD=rmit \
+                        -e POSTGRES_DB=rmit_store \
+                        postgres:16-alpine
+                    sleep 10
+                    docker run --rm --network ci-${env.BUILD_NUMBER} \
+                        -e DATABASE_URL=postgres://rmit:rmit@ci-db-${env.BUILD_NUMBER}:5432/rmit_store \
+                        -v "\$PWD/reports:/repo/reports" \
+                        rmit-api:test-${env.SHA} pytest -m "unit or integration" \
+                        --junitxml=reports/backend.xml
                 """
             }
             post {
@@ -82,140 +85,187 @@ pipeline {
                         docker rm -f ci-db-${env.BUILD_NUMBER} || true
                         docker network rm ci-${env.BUILD_NUMBER} || true
                     """
-                    junit allowEmptyResults: false, testResults: 'test-reports/*.xml'
+                    junit allowEmptyResults: false, testResults: 'reports/backend.xml'
                 }
             }
         }
 
-        stage('Frontend E2E tests') {
+        // Authenticate to ECR using the EC2 instance profile, avoiding static credentials.
+        // ECR must match the registry used by the Compose and Swarm image definitions.
+        // Docker Hub would require restoring Jenkins credentials and its login step.
+
+        stage('Push Images') {
             steps {
-                script { env.CURRENT_STAGE = 'Frontend E2E tests' }
                 sh """
-                    docker network create ci-e2e-${env.BUILD_NUMBER} || true
+                    aws ecr get-login-password --region ${AWS_REGION} \
+                        | docker login --username AWS --password-stdin ${ECR}
+                    
+                    docker tag rmit-api:${env.SHA} ${ECR}/rmit-api:${env.SHA}
+                    docker tag rmit-client:${env.SHA} ${ECR}/rmit-client:${env.SHA}
 
-                    docker run -d --name ci-e2e-db-${env.BUILD_NUMBER} \\
-                        --network ci-e2e-${env.BUILD_NUMBER} \\
-                        -e POSTGRES_USER=rmit \\
-                        -e POSTGRES_PASSWORD=rmit \\
-                        -e POSTGRES_DB=rmit_store \\
-                        postgres:16
-
-                    echo 'Waiting for e2e database to accept connections...'
-                    for i in \$(seq 1 15); do
-                        docker exec ci-e2e-db-${env.BUILD_NUMBER} pg_isready -U rmit && break
-                        sleep 2
-                    done
-
-                    docker run -d --name ci-e2e-api-${env.BUILD_NUMBER} \\
-                        --network ci-e2e-${env.BUILD_NUMBER} \\
-                        -e DATABASE_URL=postgres://rmit:rmit@ci-e2e-db-${env.BUILD_NUMBER}:5432/rmit_store \\
-                        -e SECRET_KEY=jenkins-e2e-key \\
-                        -e ALLOWED_HOSTS=localhost,127.0.0.1 \\
-                        -e CORS_ALLOWED_ORIGINS=http://ci-e2e-frontend-${env.BUILD_NUMBER} \\
-                        -e DJANGO_SETTINGS_MODULE=config.settings.dev \\
-                        rmit-api:${env.SHA}
-
-                    echo 'Waiting for API to become healthy...'
-                    for i in \$(seq 1 15); do
-                        docker exec ci-e2e-api-${env.BUILD_NUMBER} curl -sf http://localhost:8000/healthz/ && break
-                        sleep 2
-                    done
-
-                    docker exec ci-e2e-api-${env.BUILD_NUMBER} python manage.py seed_demo \\
-                        --admin-email admin@rmit.edu.au \\
-                        --admin-password 'RmitStore2767!' --no-images || true
-
-                    echo "window.__APP_CONFIG__ = { API_BASE_URL: 'http://ci-e2e-api-${env.BUILD_NUMBER}:8000/api' }" > /tmp/e2e-config-${env.BUILD_NUMBER}.js
-
-                    docker run -d --name ci-e2e-frontend-${env.BUILD_NUMBER} \\
-                        --network ci-e2e-${env.BUILD_NUMBER} \\
-                        -v /tmp/e2e-config-${env.BUILD_NUMBER}.js:/usr/share/nginx/html/config.js:ro \\
-                        rmit-client:${env.SHA}
-
-                    docker run --rm --network ci-e2e-${env.BUILD_NUMBER} \\
-                        -e E2E_BASE_URL=http://ci-e2e-frontend-${env.BUILD_NUMBER} \\
-                        -v "\$(pwd)/app/client:/work" -w /work \\
-                        mcr.microsoft.com/playwright:v1.62.1-jammy \\
-                        sh -c "npm install --no-save @playwright/test && npx playwright test --config=playwright.config.js"
-                """
-            }
-            post {
-                always {
-                    sh """
-                        docker rm -f ci-e2e-db-${env.BUILD_NUMBER} ci-e2e-api-${env.BUILD_NUMBER} ci-e2e-frontend-${env.BUILD_NUMBER} || true
-                        docker network rm ci-e2e-${env.BUILD_NUMBER} || true
-                    """
-                }
-            }
-        }
-
-
-        stage('Push images') {
-            steps {
-                script { env.CURRENT_STAGE = 'Push images' }
-                sh """
-                    aws ecr get-login-password --region ${env.AWS_REGION} \\
-                        | docker login --username AWS --password-stdin ${env.ECR}
-
-                    docker tag rmit-api:${env.SHA} ${env.ECR}/rmit-api:${env.SHA}
-                    docker tag rmit-client:${env.SHA} ${env.ECR}/rmit-client:${env.SHA}
-
-                    docker push ${env.ECR}/rmit-api:${env.SHA}
-                    docker push ${env.ECR}/rmit-client:${env.SHA}
+                    docker push ${ECR}/rmit-api:${env.SHA}
+                    docker push ${ECR}/rmit-client:${env.SHA}
                 """
             }
         }
 
-        stage('Deploy staging') {
+        // Deployment files and compose.env are prepared on the staging host by Ansible.
+        // Jenkins only copies the Compose files; no checkout or GitHub credentials are
+        // needed on the host. ECR pulls use the EC2 instance profile.
+
+        // Staging runs idempotent seed_demo with --demo-users to provide the catalogue
+        // and accounts required by E2E tests. Production seeds only the catalogue;
+        // credentials come from SSM through Docker secrets.
+
+        // Rationale for excluding --demo-users in production: the demo accounts are not real users, and they are not needed for the production catalogue.
+        // In production, it should be left for sellers to create their own accounts, and for buyers to create their own accounts. The demo accounts are only for testing and demonstration purposes, and should not be present in the production environment.
+
+        // create_admin must run before seed_demo. Never use --flush: repeated deploys
+        // must preserve existing data. Jenkins handles both staging and production
+        // deployment, so deploy.sh is not required.
+        stage('Deploy Staging') {
             steps {
-                script { env.CURRENT_STAGE = 'Deploy staging' }
-                sshagent(['app-host-key']) {
-                    sh """
-                        ssh -o StrictHostKeyChecking=no ${env.STAGING} \\
-                            'GIT_SHA=${env.SHA} ~/deploy.sh'
-                    """
-                }
+                sh """
+                    scp -o StrictHostKeyChecking=no docker-compose.prod.yml ${STAGING}:~/deploy/
+                    scp -o StrictHostKeyChecking=no docker/client-nginx-compose.conf ${STAGING}:~/deploy/docker/
+
+                    ssh -o StrictHostKeyChecking=no ${STAGING} \
+                      'cd ~/deploy \
+                       && export ECR=${env.ECR} IMAGE_TAG=${env.SHA} \
+                       && docker compose --env-file compose.env -f docker-compose.prod.yml pull \
+                       && docker compose --env-file compose.env -f docker-compose.prod.yml up -d --remove-orphans \
+                       && docker compose --env-file compose.env -f docker-compose.prod.yml \
+                            run --rm --no-deps api python manage.py create_admin \
+                       && docker compose --env-file compose.env -f docker-compose.prod.yml \
+                            run --rm --no-deps api python manage.py seed_demo --demo-users \
+                       && docker image prune -f'
+                """
+                // Printed so a rollback by hand needs no lookup: ssh in, cd ~/deploy,
+                // and rerun the same two exports with an older IMAGE_TAG.
+                echo "Deployed ${env.SHA} to ${env.STAGING_URL} from ${env.ECR}"
             }
         }
 
         stage('Smoke staging') {
             steps {
-                script { env.CURRENT_STAGE = 'Smoke staging' }
                 sh """
-                    curl -sf ${env.STAGING_URL}/healthz/
-                    curl -sf ${env.STAGING_URL}/readyz/
+                    docker run --rm --network host \
+                        -e BASE_URL=${STAGING_URL} \
+                        -e GIT_SHA=${env.SHA} \
+                        -e EXPECT_CATALOGUE=1 \
+                        -v "\$PWD/reports:/repo/reports" \
+                        rmit-api:test-${env.SHA} pytest tests/smoke --junitxml=reports/smoke.xml
                 """
             }
-        }
-
-        stage('Promote to production') {
-            when {
-                branch 'main'
-            }
-            steps {
-                script { env.CURRENT_STAGE = 'Promote to production' }
-                sshagent(['app-host-key']) {
-                    sh """
-                        ssh -o StrictHostKeyChecking=no ${env.SWARM_MGR} '
-                            cd ~/deploy &&
-                            ECR=${env.ECR} GIT_SHA=${env.SHA} docker stack deploy \\
-                                -c swarm/stack.yml --with-registry-auth rmit
-                        '
-                    """
+            post {
+                always {
+                    junit 'reports/smoke.xml'
                 }
             }
         }
 
-        stage('Smoke production') {
-            when {
-                branch 'main'
-            }
+        // Run migration, admin creation and demo seeding once per release,
+        // before deploying replicas. Seeding is intentional and idempotent:
+        // it only adds missing data, and --flush is never used to protect
+        // existing production data. Admin credentials are injected via Docker
+        // secrets, not --env, so they are not exposed in the Swarm log.
+        stage('Migrate and seed prod') {
             steps {
-                script { env.CURRENT_STAGE = 'Smoke production' }
                 sh """
-                    curl -sf ${env.PROD_URL}/healthz/
-                    curl -sf ${env.PROD_URL}/readyz/
+                    ssh -o StrictHostKeyChecking=no ${SWARM_MGR} '
+                        set -e
+                        docker service rm rmit-migrate 2>/dev/null || true
+
+                        docker service create --name rmit-migrate --detach \
+                            --restart-condition none \
+                            --secret SECRET_KEY \
+                            --secret DATABASE_URL \
+                            --secret DJANGO_SUPERUSER_PASSWORD \
+                            --env DJANGO_SETTINGS_MODULE=config.settings.prod \
+                            --env ALLOWED_HOSTS=127.0.0.1 \
+                            --env DJANGO_SUPERUSER_EMAIL=admin@rmit.edu.au \
+                            --env USE_S3=True \
+                            --env AWS_STORAGE_BUCKET_NAME=${env.MEDIA_BUCKET} \
+                            --env AWS_S3_REGION_NAME=${env.AWS_REGION} \
+                            --with-registry-auth \
+                            ${ECR}/rmit-api:${env.SHA} \
+                            sh -c "python manage.py migrate --noinput && python manage.py create_admin && python manage.py seed_demo"
+
+                        for i in \$(seq 1 120); do
+                            STATE=\$(docker service ps rmit-migrate --format '{{.CurrentState}}' | head -n1)
+                            case "\$STATE" in
+                                Complete*) echo "Migration complete"; break;;
+                                Failed*|Rejected*)
+                                    docker service logs rmit-migrate
+                                    docker service rm rmit-migrate
+                                    exit 1 ;;
+                            esac
+                            sleep 5
+                        done
+
+                        docker service logs rmit-migrate
+                        docker service rm rmit-migrate
+                    '
                 """
+            }
+        }
+
+        stage('Deploy prod (Swarm)') {
+            steps {
+                sh """
+                    ssh -o StrictHostKeyChecking=no ${SWARM_MGR} 'mkdir -p ~/deploy/swarm ~/deploy/docker'
+                    scp -o StrictHostKeyChecking=no swarm/stack.yml ${SWARM_MGR}:~/deploy/swarm/
+                    scp -o StrictHostKeyChecking=no docker/client-nginx-compose.conf ${SWARM_MGR}:~/deploy/docker/
+
+                    ssh -o StrictHostKeyChecking=no ${SWARM_MGR} '
+                        cd ~/deploy &&
+                        ECR=${ECR} GIT_SHA=${env.SHA} \
+                        ALB_DNS=${env.ALB_DNS} MEDIA_BUCKET=${env.MEDIA_BUCKET} \
+                        AWS_REGION=${env.AWS_REGION} EMAIL_ADDRESS=${env.EMAIL_ADDRESS} \
+                        docker stack deploy \
+                            -c swarm/stack.yml --with-registry-auth rmit
+                    '
+                """
+
+                // Wait for the production load balancer to serve the newly deployed commit.
+                // The rolling update may temporarily route requests to old and new tasks.
+                // Require 10 consecutive responses with the expected SHA before continuing.
+                // Retry for up to 80 attempts (approximately 4 minutes); fail the pipeline
+                // if the load balancer never settles on the new version.
+                sh """
+                    HITS=0
+                    for i in \$(seq 1 80); do
+                        BODY=\$(curl -s --max-time 5 ${PROD_URL}/api/version/ || true)
+                        case "\$BODY" in
+                            *${env.SHA}*) HITS=\$((HITS + 1)) ;;
+                            *)            HITS=0 ;;
+                        esac
+                        if [ "\$HITS" -ge 10 ]; then
+                            echo "The last 10 responses all report ${env.SHA}"
+                            exit 0
+                        fi
+                        sleep 3
+                    done
+                    echo "The load balancer never settled on ${env.SHA}. Last response: \$BODY"
+                    exit 1
+                """
+            }
+        }
+
+        stage('Smoke prod') {
+            steps {
+                sh """
+                    docker run --rm --network host \
+                        -e BASE_URL=${PROD_URL} \
+                        -e GIT_SHA=${env.SHA} \
+                        -v "\$PWD/reports:/repo/reports" \
+                        rmit-api:test-${env.SHA} pytest tests/smoke --junitxml=reports/smoke-prod.xml
+                """
+            }
+            post {
+                always {
+                    junit 'reports/smoke-prod.xml'
+                }
             }
         }
     }
@@ -223,15 +273,31 @@ pipeline {
     post {
         failure {
             emailext(
-                subject: "FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER} at ${env.CURRENT_STAGE ?: 'unknown stage'} (${env.SHA ?: 'unknown commit'})",
-                body: """Build failed.
+                subject: "FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER} (${env.SHA})",
+                body: """Build failed at stage: ${env.STAGE_NAME}
 
-Stage: ${env.CURRENT_STAGE ?: 'unknown - failure occurred before a stage started'}
-Commit: ${env.SHA ?: 'unknown - failure occurred before checkout completed'}
+Commit: ${env.SHA}
 Log: ${env.BUILD_URL}console
 
 Production not touched.
                 """,
+                to: '$DEFAULT_RECIPIENTS',
+            )
+        }
+        unstable {
+            emailext(
+                subject: "UNSTABLE: ${env.JOB_NAME} #${env.BUILD_NUMBER} (${env.SHA})",
+                body: """Build unstable at stage: ${env.STAGE_NAME}
+Commit: ${env.SHA}
+Log: ${env.BUILD_URL}console coverage may be low. Staging may be broken.
+                """,
+                to: '$DEFAULT_RECIPIENTS',
+            )
+        }
+        fixed {
+            emailext(
+                subject: "RECOVERED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: "Pipeline is recovered to commit ${env.SHA}. \n${env.BUILD_URL}",
                 to: '$DEFAULT_RECIPIENTS',
             )
         }
