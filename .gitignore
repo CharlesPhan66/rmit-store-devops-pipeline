@@ -77,6 +77,7 @@ venv/
 node_modules/
 .m2/
 .gradle/
+compose.env
 
 # ---------------------------------------------------------
 # Local tool state
@@ -114,9 +115,12 @@ jenkins_home/jobs/**
 
 # AI Agents
 CLAUDE.MD
+AGENTS.md
 
 # Planning notes (working documents, not deliverables)
 plan/
+docs/
+
 
 # Compose runtime configuration for Plan E option B.
 # Contains SECRET_KEY and the database password.
