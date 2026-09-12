@@ -1,5 +1,11 @@
-// Author: @danzelexp2713 (danzel)
-// Last updated: 11/9/2026
+// RMIT University Vietnam
+// Course: COSC2767|COSC2805 Systems Deployment and Operations
+// Semester: 2026B
+// Assessment: Assignment 2
+// Author: Le Nguyen Thanh Trung - 4123479
+// Created date: 22/08/2026
+// Last modified: 11/09/2026
+// Acknowledgement: None
 
 import { test, expect } from "@playwright/test";
 

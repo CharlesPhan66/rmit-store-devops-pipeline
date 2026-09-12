@@ -1,3 +1,12 @@
+# RMIT University Vietnam
+# Course: COSC2767|COSC2805 Systems Deployment and Operations
+# Semester: 2026B
+# Assessment: Assignment 2
+# Authors: Dang Khoa - 4058813, Nguyen Cong Quoc Dat - 4066942, Charles Phan - 4131861
+# Created date: 31/08/2026
+# Last modified: 11/09/2026
+# Acknowledgement: None
+
 # RMIT Store — frontend image (Vue 3 SPA served by nginx).
 #
 # Please build from the repo root, not app/client/:

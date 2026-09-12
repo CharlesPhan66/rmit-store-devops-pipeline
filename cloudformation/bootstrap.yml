@@ -1,3 +1,12 @@
+# RMIT University Vietnam
+# Course: COSC2767|COSC2805 Systems Deployment and Operations
+# Semester: 2026B
+# Assessment: Assignment 2
+# Author: Charles Phan - 4131861
+# Created date: 06/09/2026
+# Last modified: 06/09/2026
+# Acknowledgement: None
+
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   RMIT Store - the Ansible control node, on its own.

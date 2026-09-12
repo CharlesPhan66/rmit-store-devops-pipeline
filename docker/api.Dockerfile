@@ -1,7 +1,14 @@
+# RMIT University Vietnam
+# Course: COSC2767|COSC2805 Systems Deployment and Operations
+# Semester: 2026B
+# Assessment: Assignment 2
+# Authors: Dang Khoa - 4058813, Nguyen Cong Quoc Dat - 4066942, Le Nguyen Thanh Trung - 4123479, Charles Phan - 4131861
+# Created date: 31/08/2026
+# Last modified: 12/09/2026
+# Acknowledgement: None
+
 # RMIT Store — API image (Django + gunicorn).
 #
-# Author: @CharlesPhan66 (Charles Phan)
-# Last updated: 01/09/2026
 # Please build from the repo root, not app/server/. Tom's application is
 # placed under one level down, so every COPY source carries the app/ prefix:
 #

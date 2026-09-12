@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# RMIT University Vietnam
+# Course: COSC2767|COSC2805 Systems Deployment and Operations
+# Semester: 2026B
+# Assessment: Assignment 2
+# Author: Charles Phan - 4131861
+# Created date: 07/09/2026
+# Last modified: 08/09/2026
+# Acknowledgement: None
+
 #
 # This file is to prompt you for secrets to be stored in SSM Parameter Store
 # As in production, these secrets are up to you to manage, so we do not take them as command line arguments and assume that as "Automation"

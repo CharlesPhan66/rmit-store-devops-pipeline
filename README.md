@@ -1,3 +1,14 @@
+<!--
+  RMIT University Vietnam
+  Course: COSC2767|COSC2805 Systems Deployment and Operations
+  Semester: 2026B
+  Assessment: Assignment 2
+  Author: Charles Phan - 4131861
+  Created date: 17/08/2026
+  Last modified: 12/09/2026
+  Acknowledgement: None
+-->
+
 # [Project Title]
 
 ## 1. Project Information
@@ -40,18 +51,16 @@ Everything the team built, the CI/CD pipeline, IaC, configuration management, co
 │   ├── roles/                     # docker, app, jenkins, swarm
 │   ├── group_vars/, inventory/
 │   └── preflight.yml, contract.yml, verify.yml   # validation playbooks
-├── docker/                        # Dockerfiles, nginx configs, EC2 user-data scripts
+├── docker/                        # Dockerfiles, nginx configs, container entrypoints
 │   ├── api.Dockerfile, client.Dockerfile
 │   ├── api-entrypoint.sh, client-entrypoint.sh
-│   ├── client-nginx.conf, client-nginx-compose.conf
-│   └── userdata-*.sh
+│   └── client-nginx.conf, client-nginx-compose.conf
 ├── swarm/
 │   └── stack.yml                  # production Swarm stack
 ├── scripts/
 │   └── put-secrets.sh
-├── tests/                         # unit, integration, frontend, e2e, smoke tests
-│   └── backend/, frontend/, e2e/, smoke/
-└── docs/                          # write-up notes
+└── tests/                         # unit, integration, frontend, e2e, smoke tests
+    └── backend/, frontend/, e2e/, smoke/
 ```
 
 A simple test proves the rule is being kept: delete `app/`, vendor in a newer copy of Tom's app, and nothing the team built is lost. It's also why `git diff` against the original handoff, scoped to `app/`, is a one-line proof for the report that none of Tom's code was touched.

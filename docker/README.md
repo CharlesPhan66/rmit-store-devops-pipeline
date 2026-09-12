@@ -1,3 +1,14 @@
+<!--
+  RMIT University Vietnam
+  Course: COSC2767|COSC2805 Systems Deployment and Operations
+  Semester: 2026B
+  Assessment: Assignment 2
+  Author: Charles Phan - 4131861
+  Created date: 30/08/2026
+  Last modified: 11/09/2026
+  Acknowledgement: None
+-->
+
 # Container images
 
 Two images, built from the **repo root** because Tom's application is vendored
@@ -10,52 +21,15 @@ under `app/` and each build needs to reach into it.
 | `client-entrypoint.sh` | — | — | renders `config.js` from `$API_BASE_URL` at container start |
 | `client-nginx.conf` | — | — | SPA fallback, cache rules, `/nginx-health` |
 | `client-nginx-compose.conf` | — | — | the same plus `/api/`, `/media/`, `/static/` proxied to the `api` service — used only by `docker-compose.yml` |
-| `userdata-api.sh` | — | — | EC2 user data for the API host: hostname, Docker, git |
-| `userdata-client.sh` | — | — | the same, for the frontend host |
-| `userdata-jenkins.sh` | — | — | the Jenkins controller: `/tmp` resize, Java 21, Docker, Jenkins |
-| `userdata-swarm.sh` | — | — | a Swarm node: Docker, ECR credential helper, Jenkins deploy key. Template — fill in `NODE_NAME` and `JENKINS_PUBKEY` |
 
-Paste one into the launch wizard under **Advanced details → User data**, or pass
-`--user-data file://docker/userdata-api.sh` to `aws ec2 run-instances`. They run
-once, on first boot, as root. Never put a secret in them: user data is readable
-from inside the instance by any process, without privileges.
-
-`userdata-api.sh` and `userdata-client.sh` differ by one effective line — the
-hostname. Every other difference between those two machines lives inside the
-images.
-
-`userdata-jenkins.sh` is genuinely different, because the Jenkins host is the
-one machine that is not just a container runtime. Three things in it are not
-obvious and each one costs an hour if missed:
-
-- **`/tmp` grown to 3G.** On AL2023 `/tmp` is a tmpfs at 50% of RAM. Jenkins
-  marks its own node OFFLINE when the temp directory has under 1G free, so on a
-  t3.small it refuses to build anything. `size=` is a cap, not an allocation.
-- **Java 21, not 17.** Current Jenkins exits with code 1 on Java 17, and
-  `systemctl status` shows only a restart loop — the reason is in
-  `journalctl -u jenkins`.
-- **`usermod -aG docker jenkins` before the service starts.** Group membership
-  applies only to processes started afterwards.
-
-It provisions the host, not Jenkins itself. Unlocking, plugins, credentials,
-SMTP and the job are still done through the web UI; the script ends with that
-list in a comment.
-
-`userdata-swarm.sh` is the same script for every node in the cluster — manager
-and worker differ only in which `docker swarm` command you run afterwards. It
-refuses to boot with its placeholders unfilled, which is better than a node that
-looks healthy until it cannot join. Two things in it are worth knowing:
-
-- **The ECR credential helper.** `docker stack deploy --with-registry-auth`
-  copies the manager's registry credentials to the workers *at deploy time*, and
-  an ECR token lasts 12 hours. After that any task Swarm restarts — a crashed
-  container, a rebooted node — pulls with an expired token and fails with
-  `no basic auth credentials`, with no deploy running to blame. The helper asks
-  for a fresh token on every pull instead, using the instance profile.
-- **The swarm join token is deliberately absent.** It is a secret: anyone holding
-  it with a route to port 2377 can join the cluster and run containers in it.
-  User data is readable by any process inside the instance, so joining stays a
-  manual step.
+There used to be four `userdata-*.sh` scripts here (API, client, Jenkins,
+Swarm hosts). They're gone: `cloudformation/compute.yml` now gives every
+instance only a minimal inline `UserData` that installs the Ansible control
+node's public key, and Ansible provisions everything else — Docker, the ECR
+credential helper and Swarm join are `ansible/roles/docker` and
+`ansible/roles/swarm`; the Jenkins `/tmp` resize, Java 21 and the Jenkins
+install itself are `ansible/roles/jenkins`. Look there for host provisioning,
+not here.
 
 ## Build
 

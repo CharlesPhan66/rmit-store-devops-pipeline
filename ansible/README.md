@@ -1,3 +1,14 @@
+<!--
+  RMIT University Vietnam
+  Course: COSC2767|COSC2805 Systems Deployment and Operations
+  Semester: 2026B
+  Assessment: Assignment 2
+  Author: Tu Tuan Hung - 4130499
+  Created date: 06/09/2026
+  Last modified: 08/09/2026
+  Acknowledgement: None
+-->
+
 # Ansible Configuration and Docker Swarm
 
 ## Scope

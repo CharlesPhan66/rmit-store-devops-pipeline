@@ -1,5 +1,12 @@
-// Author: @CharlesPhan66 (Charles Phan), @danzelexp2713 (danzel)
-// Last updated: 11/9/2026
+// RMIT University Vietnam
+// Course: COSC2767|COSC2805 Systems Deployment and Operations
+// Semester: 2026B
+// Assessment: Assignment 2
+// Authors: Dang Khoa - 4058813, Le Nguyen Thanh Trung - 4123479, Charles Phan - 4131861
+// Created date: 31/08/2026
+// Last modified: 12/09/2026
+// Acknowledgement: None
+
 pipeline {
     agent any
 

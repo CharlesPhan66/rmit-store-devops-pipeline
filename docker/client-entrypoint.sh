@@ -1,4 +1,13 @@
 #!/bin/sh
+# RMIT University Vietnam
+# Course: COSC2767|COSC2805 Systems Deployment and Operations
+# Semester: 2026B
+# Assessment: Assignment 2
+# Author: Charles Phan - 4131861
+# Created date: 30/08/2026
+# Last modified: 11/09/2026
+# Acknowledgement: None
+
 # Render config.js from the environment, at container start.
 #
 # The API base URL is NOT baked into the JavaScript bundle. The browser reads

@@ -1,7 +1,13 @@
-# Author: @danzelexp2713 (danzel)
-# Last updated: 12/09/2026
-
 #!/usr/bin/env bash
+# RMIT University Vietnam
+# Course: COSC2767|COSC2805 Systems Deployment and Operations
+# Semester: 2026B
+# Assessment: Assignment 2
+# Authors: Le Nguyen Thanh Trung - 4123479
+# Created date: 22/08/2026
+# Last modified: 11/09/2026
+# Acknowledgement: None
+
 set -e
 
 export TARGET_URL="${TARGET_URL:-http://localhost}"

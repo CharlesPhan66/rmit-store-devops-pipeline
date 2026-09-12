@@ -1,3 +1,14 @@
+<!--
+  RMIT University Vietnam
+  Course: COSC2767|COSC2805 Systems Deployment and Operations
+  Semester: 2026B
+  Assessment: Assignment 2
+  Author: Le Nguyen Thanh Trung - 4123479
+  Created date: 08/09/2026
+  Last modified: 08/09/2026
+  Acknowledgement: None
+-->
+
 # RMIT Store – Automated Testing Suite Documentation
 
 This repository contains the end-to-end verification, integration, unit, and deployment smoke testing suite for the RMIT Store application. The suite validates all core functional capabilities across backend Django services, frontend components, and full user acceptance journeys.

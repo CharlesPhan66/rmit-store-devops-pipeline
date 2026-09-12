@@ -1,3 +1,12 @@
+# RMIT University Vietnam
+# Course: COSC2767|COSC2805 Systems Deployment and Operations
+# Semester: 2026B
+# Assessment: Assignment 2
+# Author: Le Nguyen Thanh Trung - 4123479
+# Created date: 22/08/2026
+# Last modified: 12/09/2026
+# Acknowledgement: None
+
 pytest==8.0.2
 pytest-django==4.8.0
 pytest-cov==4.1.0
