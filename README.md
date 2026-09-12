@@ -108,6 +108,12 @@ Other keys have been published to SSM are `String` types and `StringList` types,
 
 Prompts for the RDS master password (must match `DbPassword` above), the staging/production admin passwords, and the alert email address. Safe to re-run - `SECRET_KEY` is created once and never overwritten.
 
+You can verify the secrets are in SSM by:
+```bash
+aws ssm get-parameters-by-path --path /rmit --recursive \
+  --query 'Parameters[].[Name,Type]' --output table
+```
+
 **3. Ansible - configure all six hosts**
 
 Run belows commands on your local machine to easily have the IP address and scp (copy folder ansible over to the ansible host using ssh) and ssh into the ansible host (OR you can open the AWS console to view the instances to get connection ssh command). Then run the ansible-playbook commands on the ansible host to configure all six hosts.
@@ -128,6 +134,14 @@ ansible-playbook site.yml --syntax-check
 ansible 'all:!tag_Role_ansible' -m ping        # all five targets must go green
 ansible-playbook site.yml                      # first run
 ansible-playbook site.yml                      # second run must report changed=0
+```
+
+You can check if the ansible can ssh into the other hosts by running:
+```bash
+ansible tag_Role_staging -a 'docker compose version'
+ansible tag_Role_staging -a 'ls -l /home/ec2-user/deploy'
+ansible tag_Role_swarm_manager -a 'docker node ls'
+ansible tag_Role_swarm_manager -a 'docker secret ls'
 ```
 
 **4. Jenkins - the one manual step**
