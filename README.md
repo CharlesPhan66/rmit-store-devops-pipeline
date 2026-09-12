@@ -23,6 +23,8 @@
 
 Everything below assumes a **blank AWS account** and a clean checkout of this repository. No step requires the AWS Console - every resource is created by CloudFormation, Ansible, or the pipeline itself.
 
+Total time: roughly 45–60 minutes, most of it waiting on CloudFormation and the first Jenkins build.
+
 ### 2.1 Prerequisites
 
 | What | Notes |
@@ -34,7 +36,10 @@ Everything below assumes a **blank AWS account** and a clean checkout of this re
 | An EC2 key pair | `aws ec2 create-key-pair --key-name devops_project_key --query KeyMaterial --output text > ~/.ssh/devops_project_key.pem && chmod 400 ~/.ssh/devops_project_key.pem`. Used only for manual SSH debugging - no component of the pipeline depends on it; Ansible and Jenkins each generate their own operational keys. |
 | A Gmail account (Because learner lab doesn't grant access to SES, but if you prefer to use another SMTP provider, just use a different one) | For Jenkins build/deploy alert email and the app's own transactional mail. Needs an [App Password](https://myaccount.google.com/apppasswords), not the account password (This is the case for learner labs). |
 
-Total time: roughly 45–60 minutes, most of it waiting on CloudFormation and the first Jenkins build.
+**Instruction to login to the AWS account and set up the AWS CLI**
+1. Open your terminal.
+2. Run `nano ~/.aws/credentials` and paste the exact content on the AWS Details → AWS CLI → Show of Learner Lab. Save and exit.
+3. Verify the configuration by running `aws sts get-caller-identity`.
 
 ### 2.2 Order of operations
 
