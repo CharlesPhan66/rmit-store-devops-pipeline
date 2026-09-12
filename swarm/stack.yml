@@ -4,7 +4,7 @@
 # Assessment: Assignment 2
 # Authors: Tu Tuan Hung - 4130499, Charles Phan - 4131861
 # Created date: 03/09/2026
-# Last modified: 11/09/2026
+# Last modified: 13/09/2026
 # Acknowledgement: None
 
 version: "3.8"
@@ -69,7 +69,24 @@ services:
       replicas: 2
       update_config:
         parallelism: 1
+        delay: 10s
         order: start-first
+        failure_action: rollback
+        monitor: 30s
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      # /nginx-health is served by nginx itself (client-nginx-compose.conf),
+      # so this stays green independently of whether the api container is up.
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/nginx-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 secrets:
   # External: Swarm doesn't create it in run-time, it must be created in the swarm manager first by ansible task. The secret's value is read from SSM and passed to the swarm manager.
