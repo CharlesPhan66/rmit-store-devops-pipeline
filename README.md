@@ -17,6 +17,45 @@
 
 **Instructor:** Tom Huynh
 
+### 1.1 Repository Layout
+
+Tom's application lives entirely under `app/`, vendored exactly as he handed it to the team. **We never edit a single file inside `app/`** - not the Django backend, not the Vue frontend, not even a comment or a config default. It sits in this repository the same as the handoff.
+
+Everything the team built, the CI/CD pipeline, IaC, configuration management, containerization, and every test - lives **outside** `app/`, at the repository root:
+
+```
+.
+├── app/                           # Tom's application - vendored, untouched
+│   ├── server/                    # Django REST API
+│   └── client/                    # Vue 3 SPA
+├── Jenkinsfile                    # CI/CD pipeline
+├── docker-compose.yml             # local dev stack
+├── docker-compose.prod.yml        # staging deploy stack (Docker Compose)
+├── compose.env.example            # template for docker-compose.prod.yml's secrets
+├── .dockerignore
+├── cloudformation/                # AWS infrastructure (IaC)
+│   └── network.yml, bootstrap.yml, data.yml, compute.yml, smoke.yml
+├── ansible/                       # Configuration management
+│   ├── site.yml, ansible.cfg
+│   ├── roles/                     # docker, app, jenkins, swarm
+│   ├── group_vars/, inventory/
+│   └── preflight.yml, contract.yml, verify.yml   # validation playbooks
+├── docker/                        # Dockerfiles, nginx configs, EC2 user-data scripts
+│   ├── api.Dockerfile, client.Dockerfile
+│   ├── api-entrypoint.sh, client-entrypoint.sh
+│   ├── client-nginx.conf, client-nginx-compose.conf
+│   └── userdata-*.sh
+├── swarm/
+│   └── stack.yml                  # production Swarm stack
+├── scripts/
+│   └── put-secrets.sh
+├── tests/                         # unit, integration, frontend, e2e, smoke tests
+│   └── backend/, frontend/, e2e/, smoke/
+└── docs/                          # write-up notes
+```
+
+A simple test proves the rule is being kept: delete `app/`, vendor in a newer copy of Tom's app, and nothing the team built is lost. It's also why `git diff` against the original handoff, scoped to `app/`, is a one-line proof for the report that none of Tom's code was touched.
+
 ---
 
 ## 2. Reproducing the Pipeline on a Clean AWS Account
@@ -306,7 +345,161 @@ ansible tag_Role_jenkins -b -m shell -a \
 ``` 
 Then trigger the build manually from Jenkins GUI
 
-### 2.8 Troubleshooting
+### 2.8 Resuming after a Learner Lab session ends
+
+A Learner Lab session ending stops every EC2 instance. Most things survive; exactly two things change, and both are addresses.
+
+| Survives | Changes |
+|---|---|
+| Every EBS volume: Jenkins config, Docker images, `~/deploy`, `~/ansible` | **Public IP** of all six machines |
+| **Private IP** of all six machines | Your **home/office IP**, if you're somewhere else |
+| RDS endpoint, ALB DNS, S3 buckets, ECR, every SSM parameter | |
+| Swarm membership, Docker secrets, `compose.env` | |
+
+Private IPs staying put is what matters most: every SSM parameter Ansible and Jenkins read is a private IP or a DNS name, so **the playbook does not need to run again**.
+
+Steps, in order:
+
+```bash
+aws sts get-caller-identity
+
+# Check which instances are stopped, and their names:
+aws ec2 describe-instances \
+  --query 'Reservations[].Instances[].[Tags[?Key==`Name`]|[0].Value,State.Name]' \
+  --output table
+
+# Start whatever is stopped:
+aws ec2 start-instances --instance-ids $(aws ec2 describe-instances \
+  --filters Name=instance-state-name,Values=stopped \
+  --query 'Reservations[].Instances[].InstanceId' --output text)
+```
+
+Wait until everything is `running`, then reopen access for your new IP (if it changed):
+
+```bash
+aws cloudformation deploy \
+  --template-file cloudformation/network.yml \
+  --stack-name rmit-network \
+  --parameter-overrides AdminCidr=$(curl -s https://checkip.amazonaws.com)/32
+```
+
+```bash
+# Confirm every parameter is still there, and the Jenkins address is stable.
+aws ssm get-parameters-by-path --path /rmit --recursive \
+  --query 'Parameters[].[Name,Type]' --output table
+
+aws ssm get-parameter --name /rmit/JENKINS_PUBLIC_IP --query Parameter.Value --output text
+```
+
+### 2.9 Tearing down and rebuilding from scratch
+
+This is also the evidence for requirement 1: the infrastructure is disposable - it can be deleted and rebuilt on demand. Screen-record it if you're using this as evidence.
+
+**Before deleting - capture the current state**
+
+```bash
+aws cloudformation describe-stacks --query 'Stacks[].[StackName,StackStatus]' --output table
+aws ssm get-parameters-by-path --path /rmit --recursive --query 'Parameters[].[Name,Type]' --output table
+curl -s "http://$(aws ssm get-parameter --name /rmit/prod/ALB_DNS --query Parameter.Value --output text)/api/version/"
+```
+
+**Step 1 - empty S3 first, not after**
+
+CloudFormation cannot delete a bucket that still has objects in it. Skip this and `rmit-data` stalls at `DELETE_FAILED` on the media bucket, costing you another wait to come back and do this anyway.
+
+```bash
+PROD_BUCKET=$(aws ssm get-parameter --name /rmit/prod/MEDIA_BUCKET --query Parameter.Value --output text)
+STAGING_BUCKET=$(aws ssm get-parameter --name /rmit/staging/MEDIA_BUCKET --query Parameter.Value --output text)
+
+# --force empties the bucket and removes it in one call.
+aws s3 rb "s3://$STAGING_BUCKET" --force
+aws s3 rb "s3://$PROD_BUCKET"    --force
+```
+
+The production bucket also carries `DeletionPolicy: Retain`, so it survives `delete-stack` as `DELETE_SKIPPED` and then **collides on the next create** - deleting it by hand here is the only way to get a clean rebuild.
+
+**Step 2 - ECR, same reason**
+
+Both repositories carry `Retain` too.
+
+```bash
+aws ecr delete-repository --repository-name rmit-api    --force
+aws ecr delete-repository --repository-name rmit-client --force
+```
+
+**Step 3 - delete the stacks, reverse of creation order**
+
+```bash
+for STACK in rmit-compute rmit-data rmit-bootstrap rmit-network; do
+  echo "==> deleting $STACK"
+  aws cloudformation delete-stack --stack-name "$STACK"
+  aws cloudformation wait stack-delete-complete --stack-name "$STACK"
+done
+```
+
+This order is required, and CloudFormation enforces it: a stack cannot be deleted while another stack still `ImportValue`s one of its exports. `rmit-network` has to go last.
+
+The Jenkins Elastic IP is owned by CloudFormation, so it's released along with `rmit-compute` - no manual release needed. Same for the ALB's two addresses.
+
+RDS carries `DeletionPolicy: Snapshot`: the instance disappears, a final snapshot stays behind. The `rmit-store` identifier is freed, so the next build doesn't collide. To clean up completely:
+
+```bash
+aws rds describe-db-snapshots --snapshot-type manual \
+  --query 'DBSnapshots[?DBInstanceIdentifier==`rmit-store`].DBSnapshotIdentifier' --output text
+aws rds delete-db-snapshot --db-snapshot-identifier <snapshot-name>
+```
+
+**Step 4 - SSM parameters**
+
+Nothing created by the CLI or by instance user data gets deleted along with a stack.
+
+```bash
+aws ssm delete-parameters --names \
+  /rmit/staging/SECRET_KEY   /rmit/prod/SECRET_KEY \
+  /rmit/staging/DATABASE_URL /rmit/prod/DATABASE_URL \
+  /rmit/staging/ADMIN_PASSWORD /rmit/prod/ADMIN_PASSWORD \
+  /rmit/RDS_MASTER_PASSWORD \
+  /rmit/ANSIBLE_PUBKEY /rmit/JENKINS_PUBKEY
+```
+
+The last two public keys get overwritten on the next build anyway (CloudFormation/Ansible use `--overwrite`), but deleting them here means the `until` wait loop in 2.2 actually waits for something real - left in place, the loop exits immediately and `compute.yml` installs the **dead control node's key** onto five brand-new machines.
+
+**Confirm nothing is left**
+
+```bash
+aws cloudformation describe-stacks --query 'Stacks[].StackName' --output text
+aws ssm get-parameters-by-path --path /rmit --recursive --query 'Parameters[].Name' --output text
+aws ec2 describe-instances --filters Name=instance-state-name,Values=running \
+  --query 'Reservations[].Instances[].Tags[?Key==`Name`]|[0].Value' --output text
+aws ec2 describe-addresses --query 'Addresses[].PublicIp' --output text
+aws s3 ls | grep rmit || echo "no buckets left"
+```
+
+All five should come back empty.
+
+**Rebuilding - what's automated, what isn't**
+
+Start again from 2.2. This table says what's still manual:
+
+| Step | Automated? |
+|---|---|
+| 2.2 step 1: four CloudFormation stacks | ✅ four `deploy` commands |
+| 2.2 step 2: secrets | ✅ `./scripts/put-secrets.sh` |
+| 2.2 step 3: Ansible configures all six hosts | ✅ one `ansible-playbook` run |
+| 2.3/2.4: Jenkins unlock, plugins, email, job, webhook | ❌ **manual, about 20 minutes** |
+| 2.5: build, test, deploy staging and production, seed both | ✅ one `git push` |
+
+Jenkins' configuration lives on its instance's EBS volume, so it's lost along with the stack - that's the only manual part left in the whole project.
+
+Three values **will change** on rebuild, and all three need a manual update:
+
+| Changes | Fix it at |
+|---|---|
+| Jenkins Elastic IP | The webhook's Payload URL on GitHub (2.4 step 7), and Jenkins URL in Manage Jenkins → System |
+| RDS endpoint | `put-secrets.sh` handles it - re-reads `/rmit/RDS_ENDPOINT` |
+| Staging's public IP | `ansible-playbook` handles it - `ALLOWED_HOSTS` comes from the inventory |
+
+### 2.10 Troubleshooting
 
 Match the symptom below before investigating further - most of these read like a different problem than what actually caused them.
 
