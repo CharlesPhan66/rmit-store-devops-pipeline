@@ -112,14 +112,17 @@ WORKDIR /repo
 
 # Copy the requirements-dev.txt file with the same structure as the source code into the image to ensure the requirements-dev refers to the correct location of the requirements.txt file
 COPY app/server/requirements.txt app/server/requirements.txt
-COPY requirements-dev.txt .
+COPY tests/backend/requirements-dev.txt requirements-dev.txt
 RUN pip install -r requirements-dev.txt
 
 # Copy the source code
 COPY app/server/ app/server/
 
-# Because they sit outside the app/server folder
-COPY pytest.ini ./
+# Because they sit outside the app/server folder. No root pytest.ini to copy
+# any more — Jenkins always invokes pytest with an explicit
+# -c tests/backend/pytest.ini, so there is nothing for a copy at ./pytest.ini
+# to serve, and tests/backend/pytest.ini's `pythonpath = ../..` is only
+# correct relative to its own location.
 COPY tests/ tests/
 
 CMD ["pytest"]
