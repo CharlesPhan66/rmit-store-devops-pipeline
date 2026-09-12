@@ -5,7 +5,7 @@
 # Assessment: Assignment 2
 # Author: Charles Phan - 4131861
 # Created date: 05/09/2026
-# Last modified: 07/09/2026
+# Last modified: 13/09/2026
 # Acknowledgement: None
 
 # This replaces the user data of jenkins server
@@ -47,11 +47,84 @@
     append: true
   notify: restart jenkins
 
+- name: Download the Jenkins plugin installation manager tool
+  ansible.builtin.get_url:
+    url: "https://github.com/jenkinsci/plugin-installation-manager-tool/releases/download/{{ jenkins_plugin_manager_version }}/jenkins-plugin-manager-{{ jenkins_plugin_manager_version }}.jar"
+    dest: /opt/jenkins-plugin-manager.jar
+    mode: '0644'
+
+- name: Locate the jenkins.war the dnf package installed
+  ansible.builtin.command: find /usr -xdev -name jenkins.war
+  register: jenkins_war_find
+  changed_when: false
+
+- name: Install the plugins Jenkinsfile and Configuration as Code need
+  ansible.builtin.command:
+    cmd: >-
+      java -jar /opt/jenkins-plugin-manager.jar
+      --war {{ jenkins_war_find.stdout_lines[0] }}
+      --plugin-download-directory /var/lib/jenkins/plugins
+      --plugins {{ jenkins_plugins | join(' ') }}
+  become_user: jenkins
+  register: jenkins_plugin_install
+  changed_when: true
+  notify: restart jenkins
+
+- name: Fetch the secrets Configuration as Code needs, without ever logging them
+  ansible.builtin.set_fact:
+    jenkins_admin_password: "{{ lookup('amazon.aws.aws_ssm', '/rmit/JENKINS_ADMIN_PASSWORD', region=aws_region) }}"
+    email_app_password: "{{ lookup('amazon.aws.aws_ssm', '/rmit/EMAIL_PASSWORD', region=aws_region) }}"
+    github_pat: "{{ lookup('amazon.aws.aws_ssm', '/rmit/GITHUB_PAT', region=aws_region) }}"
+  no_log: true
+
+- name: Create the Configuration as Code directory
+  ansible.builtin.file:
+    path: /var/lib/jenkins/casc_configs
+    state: directory
+    owner: jenkins
+    group: jenkins
+    mode: '0750'
+
+- name: Render the Configuration as Code definition (admin user, email, credentials, the pipeline job)
+  ansible.builtin.template:
+    src: jenkins-casc.yaml.j2
+    dest: /var/lib/jenkins/casc_configs/jenkins.yaml
+    owner: jenkins
+    group: jenkins
+    mode: '0640'
+  notify: restart jenkins
+
+- name: Feed the setup-wizard skip, timezone and secrets to Jenkins as environment variables
+  ansible.builtin.blockinfile:
+    path: /etc/sysconfig/jenkins
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - Configuration as Code"
+    block: |
+      JENKINS_JAVA_OPTIONS="-Djava.awt.headless=true -Djenkins.install.runSetupWizard=false -Duser.timezone=UTC"
+      CASC_JENKINS_CONFIG=/var/lib/jenkins/casc_configs/jenkins.yaml
+      JENKINS_ADMIN_PASSWORD={{ jenkins_admin_password }}
+      EMAIL_APP_PASSWORD={{ email_app_password }}
+      GITHUB_PAT={{ github_pat }}
+  no_log: true
+  notify: restart jenkins
+
 - name: Enable and start the Jenkins service
   ansible.builtin.systemd:
     name: jenkins
     enabled: true
     state: started
+
+- name: Wait for Jenkins to boot and finish applying Configuration as Code
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:8080/api/json"
+    url_username: "{{ jenkins_admin_user }}"
+    url_password: "{{ jenkins_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+  register: jenkins_ready
+  until: jenkins_ready.status == 200
+  retries: 30
+  delay: 10
+  no_log: true
 
 - name: Give the jenkins user an SSH key
   ansible.builtin.user:
@@ -81,3 +154,59 @@
       - --value
       - "{{ jenkins_pubkey.content | b64decode | trim }}"
   changed_when: false
+
+- name: Note this run's webhook URL
+  ansible.builtin.set_fact:
+    jenkins_webhook_url: "http://{{ jenkins_public_ip }}:8080/github-webhook/"
+
+- name: List the GitHub webhooks already registered on this repo
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ github_owner }}/{{ github_repo }}/hooks"
+    headers:
+      Authorization: "Bearer {{ github_pat }}"
+      Accept: "application/vnd.github+json"
+    status_code: 200
+  register: github_hooks
+  no_log: true
+
+- name: Remove any webhook still pointing at a previous Jenkins address
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ github_owner }}/{{ github_repo }}/hooks/{{ item.id }}"
+    method: DELETE
+    headers:
+      Authorization: "Bearer {{ github_pat }}"
+      Accept: "application/vnd.github+json"
+    status_code: 204
+  loop: >-
+    {{ github_hooks.json
+       | selectattr('config.url', 'defined')
+       | selectattr('config.url', 'search', '/github-webhook/')
+       | rejectattr('config.url', 'equalto', jenkins_webhook_url)
+       | list }}
+  loop_control:
+    label: "{{ item.id }}"
+  no_log: true
+
+- name: Register the GitHub push webhook that triggers this Jenkins job (README 2.4 step 7, done once, idempotently)
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ github_owner }}/{{ github_repo }}/hooks"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ github_pat }}"
+      Accept: "application/vnd.github+json"
+    body_format: json
+    body:
+      name: web
+      active: true
+      events:
+        - push
+      config:
+        url: "{{ jenkins_webhook_url }}"
+        content_type: json
+    status_code: 201
+  when: >-
+    github_hooks.json
+    | selectattr('config.url', 'defined')
+    | selectattr('config.url', 'equalto', jenkins_webhook_url)
+    | list | length == 0
+  no_log: true
