@@ -4,7 +4,9 @@ pytest-cov==4.1.0
 pytest-mock==3.12.0
 pytest-xdist==3.5.0
 model-bakery==1.17.0
-djangorestframework==3.14.0
+# djangorestframework is not pinned here: app/server/requirements.txt already
+# installs it (>=3.15,<3.17) in the builder stage this image inherits from,
+# and pinning 3.14.0 here silently downgraded it below that range.
 playwright==1.42.0
 requests==2.31.0
 flake8==7.1.0

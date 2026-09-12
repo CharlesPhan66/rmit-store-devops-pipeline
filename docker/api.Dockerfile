@@ -118,8 +118,11 @@ RUN pip install -r requirements-dev.txt
 # Copy the source code
 COPY app/server/ app/server/
 
-# Because they sit outside the app/server folder
-COPY tests/backend/pytest.ini ./pytest.ini
+# Because they sit outside the app/server folder. No root pytest.ini to copy
+# any more — Jenkins always invokes pytest with an explicit
+# -c tests/backend/pytest.ini, so there is nothing for a copy at ./pytest.ini
+# to serve, and tests/backend/pytest.ini's `pythonpath = ../..` is only
+# correct relative to its own location.
 COPY tests/ tests/
 
 CMD ["pytest"]
