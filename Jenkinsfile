@@ -174,6 +174,7 @@ pipeline {
                         -e BASE_URL=${STAGING_URL} \
                         -e GIT_SHA=${env.SHA} \
                         -e EXPECT_CATALOGUE=1 \
+                        -e PYTHONPATH=".:app/server" \
                         -v "\$PWD/reports:/repo/reports" \
                         rmit-api:test-${env.SHA} pytest tests/smoke/test_smoke.py -m smoke \
                         --junitxml=/repo/reports/junit-smoke-staging.xml
@@ -306,6 +307,7 @@ pipeline {
                         -e TARGET_URL=${PROD_URL} \
                         -e BASE_URL=${PROD_URL} \
                         -e GIT_SHA=${env.SHA} \
+                        -e PYTHONPATH=".:app/server" \
                         -v "\$PWD/reports:/repo/reports" \
                         rmit-api:test-${env.SHA} pytest tests/smoke/test_smoke.py -m smoke \
                         --junitxml=/repo/reports/junit-smoke-prod.xml
