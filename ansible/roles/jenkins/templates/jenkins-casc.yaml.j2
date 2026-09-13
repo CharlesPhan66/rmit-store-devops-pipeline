@@ -19,12 +19,16 @@
 # so no secret ever sits in this file on disk.
 #
 # If a key below stops matching the plugin's real schema after a plugin
-# update, Jenkins logs the exact error at startup, and the fix is not to
-# guess again: Manage Jenkins -> Configuration as Code -> "View Configuration"
-# exports the authoritative YAML for whatever plugin versions are actually
-# installed. extendedEmailPublisherConfiguration is the field most likely to
-# need that treatment, since email-ext's JCasC export key has changed across
-# major versions.
+# update, Jenkins refuses to boot and journalctl -u jenkins names the exact
+# offending key (io.jenkins.plugins.casc.UnknownAttributesException). That
+# already happened to both `mailer` and `email-ext` below - mailer moved
+# smtpAuthUsername/smtpAuthPassword into a nested authentication.username/
+# authentication.password (NOT authentication.credentialsId - CasC rejects
+# that), and email-ext dropped its own smtpServer/smtpPort/useSsl/
+# credentialsId entirely, now reusing mailer's transport and auth wholesale.
+# Fix by reading the crash log, not by guessing: once Jenkins boots at all,
+# Manage Jenkins -> Configuration as Code -> "View Configuration" exports
+# the authoritative YAML for whatever plugin versions are actually installed.
 
 jenkins:
   systemMessage: "RMIT Store CI/CD - provisioned by Ansible. Do not click through the setup wizard by hand; edit the role instead."
@@ -46,13 +50,10 @@ unclassified:
     useSsl: false
     useTls: true
     charset: "UTF-8"
-    smtpAuthUsername: "{{ email_address }}"
-    smtpAuthPassword: "${EMAIL_APP_PASSWORD}"
-  extendedEmailPublisherConfiguration:
-    smtpServer: "smtp.gmail.com"
-    smtpPort: "587"
-    useSsl: false
-    credentialsId: "gmail-smtp"
+    authentication:
+      username: "{{ email_address }}"
+      password: "${EMAIL_APP_PASSWORD}"
+  email-ext:
     defaultRecipients: "{{ email_address }}"
     defaultContentType: "text/plain"
     charset: "UTF-8"

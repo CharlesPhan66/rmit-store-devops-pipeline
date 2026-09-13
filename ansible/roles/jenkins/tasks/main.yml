@@ -129,6 +129,9 @@
     - reload systemd
     - restart jenkins
 
+- name: Apply the systemd override now, not at end-of-play
+  ansible.builtin.meta: flush_handlers
+
 - name: Enable and start the Jenkins service
   ansible.builtin.systemd:
     name: jenkins
