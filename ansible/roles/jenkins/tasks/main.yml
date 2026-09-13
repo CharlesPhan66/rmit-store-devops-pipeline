@@ -97,9 +97,13 @@
 - name: Feed the setup-wizard skip, timezone and secrets to Jenkins as environment variables
   ansible.builtin.blockinfile:
     path: /etc/sysconfig/jenkins
+    create: true
+    owner: root
+    group: root
+    mode: '0600'
     marker: "# {mark} ANSIBLE MANAGED BLOCK - Configuration as Code"
     block: |
-      JENKINS_JAVA_OPTIONS="-Djava.awt.headless=true -Djenkins.install.runSetupWizard=false -Duser.timezone=UTC"
+      JENKINS_JAVA_OPTIONS="-Djava.awt.headless=true -Djenkins.install.runSetupWizard=false -Duser.timezone=Asia/Ho_Chi_Minh"
       CASC_JENKINS_CONFIG=/var/lib/jenkins/casc_configs/jenkins.yaml
       JENKINS_ADMIN_PASSWORD={{ jenkins_admin_password }}
       EMAIL_APP_PASSWORD={{ email_app_password }}
