@@ -33,6 +33,7 @@ jenkins_plugins:
   - configuration-as-code
   - job-dsl
   - workflow-aggregator
+  - pipeline-stage-view
   - git
   - github
   - junit
