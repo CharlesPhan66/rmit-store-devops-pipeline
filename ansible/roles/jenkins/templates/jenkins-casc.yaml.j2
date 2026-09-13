@@ -13,7 +13,9 @@
 # ${JENKINS_ADMIN_PASSWORD}, ${EMAIL_APP_PASSWORD} and ${GITHUB_PAT} are left
 # as literal env-var placeholders on purpose: the configuration-as-code
 # plugin resolves them from the Jenkins process environment at startup
-# (written to /etc/sysconfig/jenkins by ansible/roles/jenkins/tasks/main.yml),
+# (written to /etc/systemd/system/jenkins.service.d/override.conf by
+# ansible/roles/jenkins/tasks/main.yml - this RPM's jenkins.service unit has
+# no EnvironmentFile=, so /etc/sysconfig/jenkins is never actually read),
 # so no secret ever sits in this file on disk.
 #
 # If a key below stops matching the plugin's real schema after a plugin

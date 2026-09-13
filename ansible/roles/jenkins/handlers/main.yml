@@ -8,6 +8,10 @@
 # Last modified: 05/09/2026
 # Acknowledgement: None
 
+- name: reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
 - name: restart jenkins
   ansible.builtin.systemd:
     name: jenkins

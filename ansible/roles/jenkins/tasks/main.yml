@@ -94,22 +94,40 @@
     mode: '0640'
   notify: restart jenkins
 
-- name: Feed the setup-wizard skip, timezone and secrets to Jenkins as environment variables
-  ansible.builtin.blockinfile:
+- name: Remove the stale /etc/sysconfig/jenkins from earlier attempts
+  ansible.builtin.file:
     path: /etc/sysconfig/jenkins
-    create: true
+    state: absent
+
+- name: Ensure the systemd drop-in directory for jenkins.service exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/jenkins.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Feed the setup-wizard skip, timezone and secrets to Jenkins via a systemd override
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/jenkins.service.d/override.conf
     owner: root
     group: root
     mode: '0600'
-    marker: "# {mark} ANSIBLE MANAGED BLOCK - Configuration as Code"
-    block: |
-      JENKINS_JAVA_OPTIONS="-Djava.awt.headless=true -Djenkins.install.runSetupWizard=false -Duser.timezone=Asia/Ho_Chi_Minh"
-      CASC_JENKINS_CONFIG=/var/lib/jenkins/casc_configs/jenkins.yaml
-      JENKINS_ADMIN_PASSWORD={{ jenkins_admin_password }}
-      EMAIL_APP_PASSWORD={{ email_app_password }}
-      GITHUB_PAT={{ github_pat }}
+    content: |
+      # ANSIBLE MANAGED - Configuration as Code
+      # This Environment="JAVA_OPTS=..." replaces the unit's own JAVA_OPTS
+      # (systemd applies later Environment= assignments for the same key
+      # last), so java.awt.headless must be repeated here, not just appended.
+      [Service]
+      Environment="JAVA_OPTS=-Djava.awt.headless=true -Djenkins.install.runSetupWizard=false -Duser.timezone=Asia/Ho_Chi_Minh"
+      Environment="CASC_JENKINS_CONFIG=/var/lib/jenkins/casc_configs/jenkins.yaml"
+      Environment="JENKINS_ADMIN_PASSWORD={{ jenkins_admin_password }}"
+      Environment="EMAIL_APP_PASSWORD={{ email_app_password }}"
+      Environment="GITHUB_PAT={{ github_pat }}"
   no_log: true
-  notify: restart jenkins
+  notify:
+    - reload systemd
+    - restart jenkins
 
 - name: Enable and start the Jenkins service
   ansible.builtin.systemd:
