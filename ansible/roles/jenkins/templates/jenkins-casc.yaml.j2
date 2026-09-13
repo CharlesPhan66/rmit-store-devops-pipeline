@@ -38,7 +38,12 @@ jenkins:
       users:
         - id: "{{ jenkins_admin_user }}"
           password: "${JENKINS_ADMIN_PASSWORD}"
-  authorizationStrategy: "loggedInUsersCanDoAnything"
+  # The bare string form leaves allowAnonymousRead at its class default,
+  # which is true - anyone could view the dashboard/job without logging in
+  # despite the strategy's name. Set it explicitly.
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
 
 unclassified:
   location:
