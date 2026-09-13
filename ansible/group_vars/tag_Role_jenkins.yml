@@ -1,0 +1,45 @@
+---
+# RMIT University Vietnam
+# Course: COSC2767|COSC2805 Systems Deployment and Operations
+# Semester: 2026B
+# Assessment: Assignment 2
+# Author: Charles Phan - 4131861
+# Created date: 13/09/2026
+# Last modified: 13/09/2026
+# Acknowledgement: None
+
+# Variables for the Jenkins host (Role=jenkins). What used to be the "one
+# manual step" (unlock wizard, plugins, email, job, webhook - README 2.3/2.4)
+# is now driven from here through Configuration as Code + Job DSL, so
+# rebuilding the stack from scratch needs no human in the Jenkins UI at all.
+
+ssm_prefix: /rmit
+
+email_address: "{{ lookup('amazon.aws.aws_ssm', '/rmit/EMAIL_ADDRESS', region=aws_region) }}"
+
+jenkins_public_ip: "{{ lookup('amazon.aws.aws_ssm', '/rmit/JENKINS_PUBLIC_IP', region=aws_region) }}"
+jenkins_url: "http://{{ jenkins_public_ip }}:8080/"
+
+jenkins_admin_user: admin
+jenkins_job_name: rmit-store
+jenkins_repo_branch: main
+jenkins_pipeline_script_path: Jenkinsfile
+
+github_owner: rmit-vietnam-computing-technologies
+github_repo: 2026b-cosc2767-a2-sg-team-13
+github_repo_url: "https://github.com/{{ github_owner }}/{{ github_repo }}.git"
+
+jenkins_plugins:
+  - configuration-as-code
+  - job-dsl
+  - workflow-aggregator
+  - pipeline-stage-view
+  - git
+  - github
+  - junit
+  - credentials
+  - credentials-binding
+  - email-ext
+  - mailer
+
+jenkins_plugin_manager_version: "2.13.2"

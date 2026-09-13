@@ -5,7 +5,7 @@
 # Assessment: Assignment 2
 # Author: Charles Phan - 4131861
 # Created date: 07/09/2026
-# Last modified: 08/09/2026
+# Last modified: 13/09/2026
 # Acknowledgement: None
 
 #
@@ -17,8 +17,8 @@
 # Run it once, after the rmit-data stack exists. Re-running is safe: the two
 # database parameters are overwritten, and SECRET_KEY is only ever created.
 #
-# For automation, export RDS_PASS, ADMIN_PASS, PROD_ADMIN_PASS, EMAIL_ADDRESS
-# and EMAIL_PASSWORD beforehand
+# For automation, export RDS_PASS, ADMIN_PASS, PROD_ADMIN_PASS, EMAIL_ADDRESS,
+# EMAIL_PASSWORD, JENKINS_ADMIN_PASS and GITHUB_PAT beforehand
 
 set -euo pipefail
 
@@ -154,6 +154,29 @@ aws ssm put-parameter --name /rmit/EMAIL_PASSWORD \
   --type SecureString --overwrite \
   --value "$EMAIL_PASSWORD" >/dev/null
 
+
+if [ -z "${JENKINS_ADMIN_PASS:-}" ]; then
+  read -rsp 'Jenkins admin password (for the admin account Ansible creates): ' JENKINS_ADMIN_PASS
+  echo
+fi
+[ -n "$JENKINS_ADMIN_PASS" ] || die "The Jenkins admin password must not be empty"
+
+echo "==> /rmit/JENKINS_ADMIN_PASSWORD"
+aws ssm put-parameter --name /rmit/JENKINS_ADMIN_PASSWORD \
+  --type SecureString --overwrite \
+  --value "$JENKINS_ADMIN_PASS" >/dev/null
+
+if [ -z "${GITHUB_PAT:-}" ]; then
+  read -rsp 'GitHub PAT (repo + admin:repo_hook scopes, for Jenkins checkout and the webhook): ' GITHUB_PAT
+  echo
+fi
+[ -n "$GITHUB_PAT" ] || die "The GitHub PAT must not be empty"
+
+echo "==> /rmit/GITHUB_PAT"
+aws ssm put-parameter --name /rmit/GITHUB_PAT \
+  --type SecureString --overwrite \
+  --value "$GITHUB_PAT" >/dev/null
+
 # --- SECRET_KEY, one per environment -----------------------------------------
 # Created, never overwritten. Rotating this signing key invalidates every
 # issued JWT and every outstanding password-reset link, so a careless re-run of
@@ -171,7 +194,7 @@ for ENV in staging prod; do
   fi
 done
 
-unset RDS_PASS ADMIN_PASS PROD_ADMIN_PASS EMAIL_PASSWORD
+unset RDS_PASS ADMIN_PASS PROD_ADMIN_PASS EMAIL_PASSWORD JENKINS_ADMIN_PASS GITHUB_PAT
 
 # Verify
 
@@ -183,10 +206,10 @@ aws ssm get-parameters-by-path --path /rmit --recursive \
 COUNT=$(aws ssm get-parameters-by-path --path /rmit --recursive \
           --query 'length(Parameters)' --output text)
 
-# 10 String from CloudFormation + the 8 written here (7 SecureString + 1
-# String). JENKINS_PUBKEY makes 19, but Ansible has not run yet at this point
+# 10 String from CloudFormation + the 10 written here (9 SecureString + 1
+# String). JENKINS_PUBKEY makes 21, but Ansible has not run yet at this point
 # in the runbook.
-if [ "$COUNT" -lt 18 ]; then
+if [ "$COUNT" -lt 20 ]; then
   die "expected at least 18 parameters, found $COUNT. A CloudFormation stack is
        probably missing - check that all four deployed."
 fi

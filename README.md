@@ -5,7 +5,7 @@
   Assessment: Assignment 2
   Author: Charles Phan - 4131861
   Created date: 17/08/2026
-  Last modified: 12/09/2026
+  Last modified: 13/09/2026
   Acknowledgement: None
 -->
 
@@ -71,7 +71,7 @@ A simple test proves the rule is being kept: delete `app/`, vendor in a newer co
 
 Everything below assumes a **blank AWS account** and a clean checkout of this repository. No step requires the AWS Console - every resource is created by CloudFormation, Ansible, or the pipeline itself.
 
-Total time: roughly 45–60 minutes, most of it waiting on CloudFormation and the first Jenkins build.
+Total time: roughly 30–40 minutes, most of it waiting on CloudFormation, plugin installation on the Jenkins host, and the first Jenkins build.
 
 ### 2.1 Prerequisites
 
@@ -82,7 +82,8 @@ Total time: roughly 45–60 minutes, most of it waiting on CloudFormation and th
 | `git` | To clone this repo and push to trigger builds. |
 | A terminal (`zsh`/`bash`) | Every command below is written for one. |
 | An EC2 key pair | `aws ec2 create-key-pair --key-name devops_project_key --query KeyMaterial --output text > ~/.ssh/devops_project_key.pem && chmod 400 ~/.ssh/devops_project_key.pem`. Used only for manual SSH debugging - no component of the pipeline depends on it; Ansible and Jenkins each generate their own operational keys. |
-| A Gmail account (Because learner lab doesn't grant access to SES, but if you prefer to use another SMTP provider, just use a different one) | For Jenkins build/deploy alert email and the app's own transactional mail. Needs an [App Password](https://myaccount.google.com/apppasswords), not the account password (This is the case for learner labs). |
+| A Gmail account (Because learner lab doesn't grant access to SES, but if you prefer to use another SMTP provider, just use a different one) | For Jenkins build/deploy alert email and the app's own transactional mail. Needs an [App Password](https://myaccount.google.com/apppasswords), not the account password (This is the case for learner labs). Ansible wires the same App Password into Jenkins automatically - see 2.3. |
+| A GitHub Personal Access Token, scopes `repo` + `admin:repo_hook` | Ansible uses this once for two things: the `github-pat` credential Jenkins checks the repo out with, and registering the push webhook itself (2.3/2.4). Classic or fine-grained both work as long as those two scopes are covered. |
 
 **Instruction to login to the AWS account and set up the AWS CLI**
 1. Open your terminal.
@@ -98,7 +99,7 @@ Jenkins both read from there. Run the steps in this order - later steps
 `ImportValue`/look up what earlier steps produced.
 
 ```
-CloudFormation (4 stacks, in order) ──> Secrets script ──> Ansible ──> Jenkins (manual, once at first setup) ──> git push to trigger or manual "Build Now"
+CloudFormation (4 stacks, in order) ──> Secrets script ──> Ansible (also provisions Jenkins: plugins, email, the job, the webhook) ──> git push to trigger or manual "Build Now"
 ```
 
 **1. CloudFormation - four stacks, this exact order**
@@ -174,7 +175,7 @@ ssh -i ~/.ssh/devops_project_key.pem ec2-user@$IP
 ```
 
 On the control node, navigate to the `ansible` folder and run the following commands to check syntax, ping all five targets (exclude itself), and run the playbook twice (the second run should report `changed=0` for idempotency)
-This installs Docker + the Compose plugin on all five container hosts, installs Java/AWS CLI/Jenkins on the Jenkins host, initializes the Docker Swarm cluster, creates the production Swarm secrets from SSM, and authorizes the Jenkins host's SSH key on the staging and Swarm hosts.
+This installs Docker + the Compose plugin on all five container hosts; installs Java/AWS CLI/Jenkins on the Jenkins host and fully provisions it - plugins, the admin account, SMTP/email, the `rmit-store` pipeline job and the GitHub webhook, via Configuration as Code (2.3/2.4) - initializes the Docker Swarm cluster, creates the production Swarm secrets from SSM, and authorizes the Jenkins host's SSH key on the staging and Swarm hosts.
 
 ```bash
 cd ~/ansible
@@ -192,38 +193,70 @@ ansible tag_Role_swarm_manager -a 'docker node ls'
 ansible tag_Role_swarm_manager -a 'docker secret ls'
 ```
 
-**4. Jenkins - the one manual step**
+**4. Jenkins - provisioned by Ansible, not by hand**
 
-Everything above is scriptable; Jenkins' own first-run wizard is not, and needs a Google App Password that only exists after a human visits Google's UI. See **2.4** below for exactly what to configure and **2.3** for the required credential IDs.
+The `jenkins` Ansible role installs Jenkins and then, via Configuration as Code, skips the setup wizard, installs every plugin the `Jenkinsfile` needs, wires up SMTP/email, creates the `rmit-store` pipeline job and registers the GitHub webhook - all from the same `/rmit/*` SSM parameters `put-secrets.sh` already wrote. See **2.3** for exactly what gets created and from which secret, and **2.4** for how to verify it and for the manual fallback if it doesn't apply cleanly.
 
 **5. Trigger the pipeline** - see **2.5**.
 
-### 2.3 Required Jenkins credentials, by ID
+### 2.3 What Ansible provisions in Jenkins, and from which secret
 
-The `Jenkinsfile` and the email configuration expect these two credentials to
-exist under exactly these IDs - nothing else needs a credential in the
-Jenkins store (deploying to staging/Swarm authenticates over SSH using the
-key Ansible generated for the `jenkins` OS user in 2.2 step 3, not a Jenkins
-credential).
+`ansible/roles/jenkins` renders `jenkins-casc.yaml.j2` through the
+Configuration as Code plugin on first boot, so none of this is clicked
+through the UI. Every value traces back to a `put-secrets.sh` prompt or a
+CloudFormation output - nothing is hardcoded in the role:
 
-| ID | Kind | Used for |
+
+| What | From | Notes |
 |---|---|---|
-| `gmail-smtp` | Username with password | SMTP auth for Extended E-mail Notification (build/test/deploy failure alerts, 2.4 step 5). Username = full Gmail address; password = a 16-character Google App Password, no spaces. |
-| `github-pat` (HTTPS) **or** `github-ssh` (SSH) | Username with password / SSH Username with private key | `checkout scm` - Jenkins reading this repository. Pick one and match it to the Repository URL scheme in the job (2.4 step 6). |
+| Setup wizard skipped, admin account | `/rmit/JENKINS_ADMIN_PASSWORD` | User ID `admin`; `loggedInUsersCanDoAnything` authorization, signup disabled. |
+| Timezone | - | `-Duser.timezone=Asia/Ho_Chi_Minh` JVM flag, same effect as the old "Preferences → Time Zone" step. |
+| `gmail-smtp` credential + Extended E-mail Notification | `/rmit/EMAIL_ADDRESS`, `/rmit/EMAIL_PASSWORD` | The same Gmail address/App Password the app itself uses for transactional mail (2.1). SMTP server/port/TLS are fixed to `smtp.gmail.com:587`/STARTTLS in the role. |
+| `github-pat` credential | `/rmit/GITHUB_PAT` | Used for `checkout scm`. HTTPS-only in the automated setup; the SSH-key alternative below is still available if you prefer it. |
+| The `rmit-store` pipeline job | `ansible/group_vars/tag_Role_jenkins.yml` | *Pipeline script from SCM*, this repo's URL, `*/main`, `Jenkinsfile`, lightweight checkout, and a `githubPush()` trigger - the same five settings from the old manual walkthrough, as Job DSL. |
+| The GitHub push webhook | `/rmit/GITHUB_PAT` + `/rmit/JENKINS_PUBLIC_IP` | Registered via the GitHub REST API, idempotently - re-running Ansible after a rebuild removes the stale hook pointing at the old Elastic IP and adds the current one. |
 
-> Note: If you use SSH instead of HTTPS for GitHub, you must create a keypair on Jenkins and add the public half to your GitHub account. You don't have to SSH into the Jenkins host to do this, you can take advantage of Ansible, which have the control over the Jenkins host and can run commands on it:
+> **Prefer SSH over HTTPS for GitHub checkout?** The automated setup only
+> creates `github-pat`. To add `github-ssh` instead, generate a keypair on the
+> Jenkins host through Ansible (no direct SSH to the Jenkins box needed) and
+> add the public half to your GitHub account:
 > ```bash
 > ansible tag_Role_jenkins -b -m shell -a \
 > 'sudo -u jenkins ssh-keygen -t ed25519 -f /var/lib/jenkins/.ssh/id_ed25519_github -N "" -C "jenkins-github-checkout"'
 >
 > ansible tag_Role_jenkins -b -a 'cat /var/lib/jenkins/.ssh/id_ed25519_github.pub'
 > ```
+> Then add an SSH credential with that ID in Jenkins and repoint the job's SCM at it by hand.
 
-Copy the output of the second command and add it to your GitHub account as a new SSH key. Then use `github-ssh` as the credential ID in Jenkins.
+### 2.4 Verifying Jenkins came up correctly (and the manual fallback)
 
-### 2.4 Jenkins setup
+After `ansible-playbook site.yml` finishes, confirm the automation actually took:
 
-1. Get the URL (Both CLI and AWS Console are good, it's your choice): 
+
+```bash
+aws ssm get-parameter --name /rmit/JENKINS_PUBLIC_IP --query Parameter.Value --output text
+```
+
+
+Open `http://<that-ip>:8080/` - it should go straight to a login screen (no
+setup wizard) and accept the `admin` account with the password you gave
+`put-secrets.sh`. The **rmit-store** job should already exist and be
+configured per **2.3**; **Manage Jenkins → System → Extended E-mail
+Notification** should already show `gmail-smtp` as the credential. On
+GitHub, **Settings → Webhooks** should list the payload URL for the current
+Elastic IP with a green checkmark on its last delivery once you trigger a
+build (2.5).
+
+**If it doesn't come up clean** - a plugin version drifted, `jenkins.yaml`
+didn't parse, whatever the cause - `journalctl -u jenkins` on the Jenkins
+host names the exact failing key. The manual walkthrough this automation
+replaces still works as a fallback and touches nothing Ansible manages, so
+it is safe to fall back to for whichever single step is broken:
+
+<details>
+<summary>Manual Jenkins setup (fallback only - Ansible does this for you by default)</summary>
+
+1. Get the URL (Both CLI and AWS Console are good, it's your choice):
 ```bash
 aws ssm get-parameter --name /rmit/JENKINS_PUBLIC_IP --query Parameter.Value --output text
 ```
@@ -233,17 +266,17 @@ It returns the public IP of the Jenkins instance, which you can paste into a bro
   ansible tag_Role_jenkins -b -a 'cat /var/lib/jenkins/secrets/initialAdminPassword'
 ```
 3. **Install suggested plugins** (already covers everything the `Jenkinsfile` needs: Pipeline, `git`, `github`, `junit`, `credentials`, `email-ext`).
-4. **Configure timezone and admin password** - Jenkins → Profile → Preferences → Time Zone: *UTC*; Jenkins → Profile → Configure → Password: set a strong password for the `admin` user then login again at `http://<above-returned-ip>:8080/`.
+4. **Configure timezone and admin password** - Jenkins → Profile → Preferences → Time Zone: *Asia/Ho_Chi_Minh*; Jenkins → Profile → Configure → Password: set a strong password for the `admin` user then login again at `http://<above-returned-ip>:8080/`.
 5. **Configure Email Notification**
 Because this stack uses Gmail for email notifications, this instruction is for Gmail SMTP configuration:
   5.1 Get App Password from Gmail account (https://myaccount.google.com/apppasswords) and copy it to clipboard (Make sure you have your account set up for 2-step verification, if not, please visit https://myaccount.google.com/security to enable it first).
   5.2 Go to https://myaccount.google.com/apppasswords and generate a new app password
-  5.3 Store the return 16-character password to configure Jenkins credential `gmail-smtp` in **2.3**
+  5.3 Store the return 16-character password to configure a Jenkins credential `gmail-smtp` (Username with password; username = full Gmail address).
   > Note: Please remove any spaces in the 16-character password when you copy it to Jenkins credential `gmail-smtp`.
   5.4 In the section of Extended E-mail Notification, configure as below:
   - SMTP server: `smtp.gmail.com`
   - SMTP port: `587`
-  - Credential: `gmail-smtp` (the credential you created in **2.3**)
+  - Credential: `gmail-smtp` (the credential you created above)
   - TLS/SSL: ☑ **Use TLS** (Do not use SSL)
   - Default Recipients: For markers, you can use your Gmail address to receive the email notification.
   5.5 (Optional) Test the configuration by clicking **Test configuration by sending test e-mail**, then fill in the test email details (The same as above for **Extended E-mail Notification**, however, you cannot choose credential, you have to fill directly the username, which is your Gmail address, and the password, which is the app password you generated with no spaces). If you receive the email, it means the configuration is correct.
@@ -262,7 +295,7 @@ Because this stack uses Gmail for email notifications, this instruction is for G
   | Script Path | `Jenkinsfile` |
   | Lightweight checkout | ☑ **Lightweight checkout** |
 
-  Then **Save** the job.
+  Then, in **Build Triggers**, tick **GitHub hook trigger for GITScm polling** - without it the webhook below arrives but nothing builds - then **Save** the job.
 7. Webhook setup:
 > Thanks to Elastic IP, the Jenkins host is reachable from the public internet over many launches of Learner Lab.
 You may find the Elastic IP of the Jenkins host from SSM quickly by:
@@ -278,6 +311,8 @@ Then on GitHub, navigate to this repository → **Settings** → **Webhooks** �
 | Event | *Just the push event* |
 Left the other options as default, then **Add webhook**.
 Navigate to the webhook's page and click **Redeliver** to test whether it returns 200.
+
+</details>
 
 ### 2.5 Triggering a deploy
 
@@ -468,7 +503,8 @@ aws ssm delete-parameters --names \
   /rmit/staging/DATABASE_URL /rmit/prod/DATABASE_URL \
   /rmit/staging/ADMIN_PASSWORD /rmit/prod/ADMIN_PASSWORD \
   /rmit/RDS_MASTER_PASSWORD \
-  /rmit/ANSIBLE_PUBKEY /rmit/JENKINS_PUBKEY
+  /rmit/ANSIBLE_PUBKEY /rmit/JENKINS_PUBKEY \
+  /rmit/EMAIL_ADDRESS /rmit/EMAIL_PASSWORD
 ```
 
 The last two public keys get overwritten on the next build anyway (CloudFormation/Ansible use `--overwrite`), but deleting them here means the `until` wait loop in 2.2 actually waits for something real - left in place, the loop exits immediately and `compute.yml` installs the **dead control node's key** onto five brand-new machines.
@@ -486,25 +522,25 @@ aws s3 ls | grep rmit || echo "no buckets left"
 
 All five should come back empty.
 
-**Rebuilding - what's automated, what isn't**
+**Rebuilding - what's automated at each step**
 
-Start again from 2.2. This table says what's still manual:
+Start again from 2.2. This table says what's automated at each step:
 
 | Step | Automated? |
 |---|---|
 | 2.2 step 1: four CloudFormation stacks | ✅ four `deploy` commands |
 | 2.2 step 2: secrets | ✅ `./scripts/put-secrets.sh` |
 | 2.2 step 3: Ansible configures all six hosts | ✅ one `ansible-playbook` run |
-| 2.3/2.4: Jenkins unlock, plugins, email, job, webhook | ❌ **manual, about 20 minutes** |
+| 2.3/2.4: Jenkins unlock, plugins, email, job, webhook | ✅ same `ansible-playbook` run, via Configuration as Code |
 | 2.5: build, test, deploy staging and production, seed both | ✅ one `git push` |
 
-Jenkins' configuration lives on its instance's EBS volume, so it's lost along with the stack - that's the only manual part left in the whole project.
+Jenkins' configuration lives on its instance's EBS volume, so it's lost along with the stack - but it's code, not clicks, so `ansible-playbook site.yml` rebuilds it identically. Nothing in the whole project is a manual, one-off step anymore.
 
-Three values **will change** on rebuild, and all three need a manual update:
+Three values **will change** on rebuild, and all three are handled without a manual update:
 
 | Changes | Fix it at |
 |---|---|
-| Jenkins Elastic IP | The webhook's Payload URL on GitHub (2.4 step 7), and Jenkins URL in Manage Jenkins → System |
+| Jenkins Elastic IP | `ansible-playbook` handles it - the webhook is re-registered against the current `/rmit/JENKINS_PUBLIC_IP` and the stale one removed (2.3) |
 | RDS endpoint | `put-secrets.sh` handles it - re-reads `/rmit/RDS_ENDPOINT` |
 | Staging's public IP | `ansible-playbook` handles it - `ALLOWED_HOSTS` comes from the inventory |
 
