@@ -505,14 +505,21 @@ aws rds delete-db-snapshot --db-snapshot-identifier <snapshot-name>
 
 Nothing created by the CLI or by instance user data gets deleted along with a stack.
 
+`delete-parameters` accepts at most 10 names per call, so this is two calls, not one:
+
 ```bash
 aws ssm delete-parameters --names \
   /rmit/staging/SECRET_KEY   /rmit/prod/SECRET_KEY \
   /rmit/staging/DATABASE_URL /rmit/prod/DATABASE_URL \
-  /rmit/staging/ADMIN_PASSWORD /rmit/prod/ADMIN_PASSWORD \
+  /rmit/staging/ADMIN_PASSWORD /rmit/prod/ADMIN_PASSWORD
+
+aws ssm delete-parameters --names \
   /rmit/RDS_MASTER_PASSWORD \
   /rmit/ANSIBLE_PUBKEY /rmit/JENKINS_PUBKEY \
   /rmit/EMAIL_ADDRESS /rmit/EMAIL_PASSWORD
+
+aws ssm delete-parameters --names \
+  /rmit/GITHUB_PAT /rmit/JENKINS_ADMIN_PASSWORD
 ```
 
 The last two public keys get overwritten on the next build anyway (CloudFormation/Ansible use `--overwrite`), but deleting them here means the `until` wait loop in 2.2 actually waits for something real - left in place, the loop exits immediately and `compute.yml` installs the **dead control node's key** onto five brand-new machines.
