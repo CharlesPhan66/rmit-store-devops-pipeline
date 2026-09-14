@@ -144,8 +144,19 @@ aws cloudformation deploy --template-file compute.yml --stack-name rmit-compute 
   --parameter-overrides KeyPairName=devops_project_key
 ```
 
-Verify: `aws cloudformation describe-stacks --query 'Stacks[].[StackName,StackStatus]' --output table`
+Verify:
+```bash
+aws cloudformation describe-stacks \
+  --query 'Stacks[].[StackName,StackStatus]' --output table
+```
 - all four `CREATE_COMPLETE`.
+
+```bash
+aws ec2 describe-instances --filters Name=instance-state-name,Values=running \
+  --query 'Reservations[].Instances[].[Tags[?Key==`Name`]|[0].Value,Tags[?Key==`Role`]|[0].Value,PrivateIpAddress,PublicIpAddress]' \
+  --output table
+```
+- All six instances are `running` and have both private and public IPs.
 
 **2. Secrets - `scripts/put-secrets.sh`**
 
@@ -195,7 +206,7 @@ ansible tag_Role_swarm_manager -a 'docker secret ls'
 
 **4. Jenkins - provisioned by Ansible, not by hand**
 
-The `jenkins` Ansible role installs Jenkins and then, via Configuration as Code, skips the setup wizard, installs every plugin the `Jenkinsfile` needs, wires up SMTP/email, creates the `rmit-store` pipeline job and registers the GitHub webhook - all from the same `/rmit/*` SSM parameters `put-secrets.sh` already wrote. See **2.3** for exactly what gets created and from which secret, and **2.4** for how to verify it and for the manual fallback if it doesn't apply cleanly.
+The `jenkins` Ansible role installs Jenkins and then, via Configuration as Code (ansible/roles/jenkins/templates/jenkins-casc.yaml.j2), skips the setup wizard, installs every plugin the `Jenkinsfile` needs, wires up SMTP/email, creates the `rmit-store` pipeline job and registers the GitHub webhook - all from the same `/rmit/*` SSM parameters `put-secrets.sh` already wrote. See **2.3** for exactly what gets created and from which secret, and **2.4** for how to verify it and for the manual fallback if it doesn't apply cleanly.
 
 **5. Trigger the pipeline** - see **2.5**.
 
@@ -216,10 +227,9 @@ CloudFormation output - nothing is hardcoded in the role:
 | The `rmit-store` pipeline job | `ansible/group_vars/tag_Role_jenkins.yml` | *Pipeline script from SCM*, this repo's URL, `*/main`, `Jenkinsfile`, lightweight checkout, and a `githubPush()` trigger - the same five settings from the old manual walkthrough, as Job DSL. |
 | The GitHub push webhook | `/rmit/GITHUB_PAT` + `/rmit/JENKINS_PUBLIC_IP` | Registered via the GitHub REST API, idempotently - re-running Ansible after a rebuild removes the stale hook pointing at the old Elastic IP and adds the current one. |
 
-> **Prefer SSH over HTTPS for GitHub checkout?** The automated setup only
-> creates `github-pat`. To add `github-ssh` instead, generate a keypair on the
-> Jenkins host through Ansible (no direct SSH to the Jenkins box needed) and
-> add the public half to your GitHub account:
+> **Prefer SSH over HTTPS for GitHub checkout?** The automated setup only creates `github-pat`.
+> To add `github-ssh` instead, generate a keypair on the Jenkins host through Ansible (no direct SSH to the Jenkins box needed) 
+> and add the public half to your GitHub account:
 > ```bash
 > ansible tag_Role_jenkins -b -m shell -a \
 > 'sudo -u jenkins ssh-keygen -t ed25519 -f /var/lib/jenkins/.ssh/id_ed25519_github -N "" -C "jenkins-github-checkout"'
@@ -285,15 +295,13 @@ Because this stack uses Gmail for email notifications, this instruction is for G
   - Type: *Pipeline*
   - **OK**
   In the Pipeline configuration page, configure as below:
-  | Setting | Value |
-  |---|---|
-  | Definition | *Pipeline script from SCM* |
-  | SCM | *Git* |
-  | Repository URL | This repo's URL (Please find it at GitHub.txt from submission zip file) |
-  | Credentials | `github-pat` or `github-ssh` (match the scheme of the Repository URL) |
-  | Branch Specifier | `*/main` |
-  | Script Path | `Jenkinsfile` |
-  | Lightweight checkout | ☑ **Lightweight checkout** |
+  - Definition: *Pipeline script from SCM*
+  - SCM: *Git*
+  - Repository URL: This repo's URL (Please find it at GitHub.txt from submission zip file)
+  - Credentials: `github-pat` or `github-ssh` (match the scheme of the Repository URL)
+  - Branch Specifier: `*/main`
+  - Script Path: `Jenkinsfile`
+  - Lightweight checkout: ☑ **Lightweight checkout**
 
   Then, in **Build Triggers**, tick **GitHub hook trigger for GITScm polling** - without it the webhook below arrives but nothing builds - then **Save** the job.
 7. Webhook setup:
@@ -528,11 +536,11 @@ Start again from 2.2. This table says what's automated at each step:
 
 | Step | Automated? |
 |---|---|
-| 2.2 step 1: four CloudFormation stacks | ✅ four `deploy` commands |
-| 2.2 step 2: secrets | ✅ `./scripts/put-secrets.sh` |
-| 2.2 step 3: Ansible configures all six hosts | ✅ one `ansible-playbook` run |
-| 2.3/2.4: Jenkins unlock, plugins, email, job, webhook | ✅ same `ansible-playbook` run, via Configuration as Code |
-| 2.5: build, test, deploy staging and production, seed both | ✅ one `git push` |
+| 2.2 step 1: four CloudFormation stacks | four `deploy` commands |
+| 2.2 step 2: secrets | `./scripts/put-secrets.sh` |
+| 2.2 step 3: Ansible configures all six hosts | one `ansible-playbook` run |
+| 2.3/2.4: Jenkins unlock, plugins, email, job, webhook | same `ansible-playbook` run, via Configuration as Code |
+| 2.5: build, test, deploy staging and production, seed both | one `git push` |
 
 Jenkins' configuration lives on its instance's EBS volume, so it's lost along with the stack - but it's code, not clicks, so `ansible-playbook site.yml` rebuilds it identically. Nothing in the whole project is a manual, one-off step anymore.
 
