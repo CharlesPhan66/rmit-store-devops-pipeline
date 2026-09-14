@@ -8,10 +8,6 @@
 # Acknowledgement: None
 
 # RMIT Store — API image (Django + gunicorn).
-#
-# Please build from the repo root, not app/server/. Tom's application is
-# placed under one level down, so every COPY source carries the app/ prefix:
-#
 # How to build this image from the repo root:
 #     docker build -f docker/api.Dockerfile -t rmit-api:local .
 
@@ -62,14 +58,6 @@ WORKDIR /srv/app
 COPY --from=builder /opt/venv /opt/venv
 COPY app/server/ /srv/app/
 
-# collectstatic runs at BUILD time, deliberately.
-#
-# The three dummy values below exist only because config.settings.prod fails
-# fast on an unset SECRET_KEY / ALLOWED_HOSTS. They are shell variables scoped
-# to this one RUN, never ENV, so they are not present in the running container
-# and do not appear in `docker inspect`. collectstatic touches no database.
-
-# Bypass Django checks with dummy vars to run collectstatic, then create media directory and transfer ownership to the app user
 RUN SECRET_KEY=build-time-only-never-used-at-runtime \
     ALLOWED_HOSTS=build.invalid \
     DATABASE_URL=postgres://build:build@127.0.0.1:5432/build \
@@ -100,14 +88,6 @@ CMD ["gunicorn", "config.wsgi:application", \
      "--error-logfile", "-"]
 
 # Stage 3. Test: This stage is used for running tests and is not part of the final image.
-# Therefore, to build the final image, please specify the target using the --target flag, e.g., `docker build --target runtime -f docker/api.Dockerfile -t rmit-api:local .`
-# To run tests, build the image with the test target and then run the tests using pytest
-# Do not get confused by this stage and the runtime stage, we need to build 2 images for different purposes
-# We do not put all in the runtime stage because we want to keep the final image small and clean, and we do not want to include test dependencies in the final image running the api
-# Ideally, run test image first, if green, go ahead for the runtime image. 
-# Use --rm to run container one-time-and-delete to test, a long-living container is not needed
-# Sorry for the long comment, but you can learn quickly by reading this as I have spent a lot of time figuring out how to make this work
-# I hope you can learn from my experience and save time.
 FROM builder AS test
 
 ENV PATH="/opt/venv/bin:$PATH" \
@@ -125,11 +105,6 @@ RUN pip install -r requirements-dev.txt
 # Copy the source code
 COPY app/server/ app/server/
 
-# Because they sit outside the app/server folder. No root pytest.ini to copy
-# any more — Jenkins always invokes pytest with an explicit
-# -c tests/backend/pytest.ini, so there is nothing for a copy at ./pytest.ini
-# to serve, and tests/backend/pytest.ini's `pythonpath = ../..` is only
-# correct relative to its own location.
 COPY tests/ tests/
 
 CMD ["pytest"]

@@ -31,9 +31,6 @@ Parameters:
     Description: Existing key pair, for the one-off human SSH
 
   ControlNodePubKey:
-    # Resolved from SSM at deploy time, not typed. bootstrap.yml's user data
-    # generates the key on the control node and publishes the public half here
-    # thanks to this, ansible can take over the five machines below without a human ever copying a key around
     Type: AWS::SSM::Parameter::Value<String>
     Default: /rmit/ANSIBLE_PUBKEY
     Description: >
@@ -50,27 +47,9 @@ Parameters:
       region and changes as new images are published.
 
 Resources:
-
-  # Instances
-  #
-  # Five machines. The sixth, the Ansible control node, lives in
-  # bootstrap.yml because this stack needs its key, then it need deplpoyed first
-  #
-  # Every one carries two tags. Name is for humans; Role is what the
-  # aws_ec2 dynamic inventory groups machines by. The Role tag is what Ansible uses to know which playbook to run on which machine.
-  #
-  # User data does ONE thing: install the control node's public key. Every
-  # package, service and file is Ansible's job, because user data runs once
-  # at first boot and can never be re-run.
-  # We don't want to repeat the phase of install docker, install docker-compose, install nginx, install python3, install pip, install git, etc.
-  # We want to use Ansible to manage the configuration of the instances, so we can easily update them and keep them consistent.
-  # So once the instances are up, all instances are blank with only the control node's public key. Therefore, we can run the Ansible playbooks to configure them.
-
   JenkinsServer:
     Type: AWS::EC2::Instance
     Properties:
-      # Builds run here. `npm run build` in the client image is the one step
-      # that genuinely needs the memory, and /tmp is a tmpfs at 50% of RAM.
       InstanceType: t3.small
       ImageId: !Ref LatestAmiId
       KeyName: !Ref KeyPairName
@@ -105,9 +84,6 @@ Resources:
   StagingServer:
     Type: AWS::EC2::Instance
     Properties:
-      # Runs the whole Compose stack: gunicorn, nginx and a migrate job. It fits
-      # on a micro, but there is no swap and no headroom, so a small buys the
-      # margin cheaply.
       InstanceType: t3.small
       ImageId: !Ref LatestAmiId
       KeyName: !Ref KeyPairName
@@ -142,10 +118,6 @@ Resources:
   SwarmManager:
     Type: AWS::EC2::Instance
     Properties:
-      # Small, not micro, because failure here is not self-healing: a worker
-      # that dies has its tasks rescheduled, while a dead manager means no
-      # deploys, no scaling and no rollback. It also carries the raft store and
-      # is where migrate and stack deploy are run from.
       InstanceType: t3.small
       ImageId: !Ref LatestAmiId
       KeyName: !Ref KeyPairName
@@ -180,9 +152,6 @@ Resources:
   SwarmWorker1:
     Type: AWS::EC2::Instance
     Properties:
-      # Sized for the peak, not the average. `order: start-first` means the node
-      # being updated briefly runs the OLD and NEW api task at once, so its
-      # memory roughly doubles for a minute during every deploy.
       InstanceType: t3.small
       ImageId: !Ref LatestAmiId
       KeyName: !Ref KeyPairName
@@ -217,8 +186,6 @@ Resources:
   SwarmWorker2:
     Type: AWS::EC2::Instance
     Properties:
-      # Same as worker 1: with parallelism 1, any node can be the one holding two
-      # api tasks during a rolling update.
       InstanceType: t3.small
       ImageId: !Ref LatestAmiId
       KeyName: !Ref KeyPairName
@@ -261,13 +228,6 @@ Resources:
       Port: 80
       Protocol: HTTP
       TargetType: instance
-      # It's different from /healthz, which is answered by Django and is used by the
-      # load balancer to determine if the Django app is healthy. /nginx-health
-      # is used by the load balancer to determine if the nginx reverse proxy is
-      # healthy
-      # That matters because the load balancer calls targets by their PRIVATE
-      # IP: a health check that hit Django would arrive with Host: 172.31.x.x,
-      # get 400 DisallowedHost, and the target would be pulled out of rotation.
       HealthCheckPath: /nginx-health
       HealthCheckProtocol: HTTP
       HealthCheckIntervalSeconds: 15
@@ -276,8 +236,6 @@ Resources:
       UnhealthyThresholdCount: 3
       Matcher:
         HttpCode: "200"
-      # Every node, including ones running no client replica: Swarm's routing
-      # mesh publishes port 80 on all of them and forwards internally.
       Targets:
         - Id: !Ref SwarmManager
         - Id: !Ref SwarmWorker1
@@ -309,16 +267,6 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
 
-  # Addresses, published to SSM
-  #
-  # This is what lets Jenkinsfile and the Ansible group_vars stop
-  # hard-coding IPs: they read these at run time. Rebuilding this stack
-  # changes the values, and nothing downstream needs editing.
-  # After this, checkout the Jenkinsfile to edit the pipeline to read these values from SSM instead of hard-coding them.
-  #
-  # Only non-secret values: AWS::SSM::Parameter cannot create SecureString,
-  # so DATABASE_URL and SECRET_KEY are set by CLI instead.
-
   AlbDnsParam:
     Type: AWS::SSM::Parameter
     Properties:
@@ -347,15 +295,6 @@ Resources:
       Type: String
       Value: !GetAtt JenkinsServer.PrivateIp
 
-  # The one address in this stack that must survive a Learner Lab session
-  # ending. GitHub's webhook points at a URL, and a lab session stop/start
-  # hands the instance a brand new public IP - which would silently break the
-  # trigger every morning. An Elastic IP is the only address here that is not
-  # reassigned, so the webhook is written once and never revisited.
-  #
-  # It is attached to Jenkins alone. Staging and the swarm nodes are reached
-  # through the VPC by private IP, and production through the load balancer's
-  # own stable DNS name, so none of them need one.
   JenkinsEip:
     Type: AWS::EC2::EIP
     Properties:
@@ -378,8 +317,6 @@ Outputs:
     Description: Public address of the production site
     Value: !GetAtt Alb.DNSName
 
-  # The Elastic IP, not the instance's own public address: this is the value
-  # the GitHub webhook URL is built from, so it has to be the stable one.
   JenkinsUrl:
     Description: Jenkins UI, and the host half of the GitHub webhook URL
     Value: !Sub "http://${JenkinsEip}:8080"

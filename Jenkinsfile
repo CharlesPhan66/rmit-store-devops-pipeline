@@ -117,10 +117,6 @@ pipeline {
             }
         }
 
-        // Authenticate to ECR using the EC2 instance profile, avoiding static credentials.
-        // ECR must match the registry used by the Compose and Swarm image definitions.
-        // Docker Hub would require restoring Jenkins credentials and its login step.
-
         stage('Push Images') {
             steps {
                 sh """
@@ -136,20 +132,6 @@ pipeline {
             }
         }
 
-        // Deployment files and compose.env are prepared on the staging host by Ansible.
-        // Jenkins only copies the Compose files; no checkout or GitHub credentials are
-        // needed on the host. ECR pulls use the EC2 instance profile.
-
-        // Staging runs idempotent seed_demo with --demo-users to provide the catalogue
-        // and accounts required by E2E tests. Production seeds only the catalogue;
-        // credentials come from SSM through Docker secrets.
-
-        // Rationale for excluding --demo-users in production: the demo accounts are not real users, and they are not needed for the production catalogue.
-        // In production, it should be left for sellers to create their own accounts, and for buyers to create their own accounts. The demo accounts are only for testing and demonstration purposes, and should not be present in the production environment.
-
-        // create_admin must run before seed_demo. Never use --flush: repeated deploys
-        // must preserve existing data. Jenkins handles both staging and production
-        // deployment, so deploy.sh is not required.
         stage('Deploy Staging') {
             steps {
                 sh """
@@ -194,10 +176,6 @@ pipeline {
             }
         }
 
-        // Browser end-to-end journeys against the just-deployed staging build,
-        // on the official Playwright image (browsers preinstalled). Runs after
-        // the staging smoke test and before any production stage, so a failed
-        // journey notifies the team and leaves production untouched.
         stage('E2E staging') {
             steps {
                 sh "rm -rf test-results"
@@ -218,11 +196,6 @@ pipeline {
             }
         }
 
-        // Run migration, admin creation and demo seeding once per release,
-        // before deploying replicas. Seeding is intentional and idempotent:
-        // it only adds missing data, and --flush is never used to protect
-        // existing production data. Admin credentials are injected via Docker
-        // secrets, not --env, so they are not exposed in the Swarm log.
         stage('Migrate and seed prod') {
             steps {
 
@@ -282,11 +255,6 @@ pipeline {
                     '
                 """
 
-                // Wait for the production load balancer to serve the newly deployed commit.
-                // The rolling update may temporarily route requests to old and new tasks.
-                // Require 10 consecutive responses with the expected SHA before continuing.
-                // Retry for up to 80 attempts (approximately 4 minutes); fail the pipeline
-                // if the load balancer never settles on the new version.
                 sh """
                     HITS=0
                     for i in \$(seq 1 80); do

@@ -8,11 +8,6 @@
 # Last modified: 08/09/2026
 # Acknowledgement: None
 
-# Applies to every host. Keep this file for values that are genuinely global —
-# anything environment-specific belongs in a tag_Role_* file instead.
-# The single place the region is written down. Every aws_ssm lookup takes it
-# explicitly, because the lookup plugin does not fall back to instance metadata
-# and fails with "requires a region and none was found" otherwise.
 aws_region: us-east-1
 
 docker_compose_version: "5.5.1"

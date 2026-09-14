@@ -8,11 +8,6 @@
 # Last modified: 13/09/2026
 # Acknowledgement: None
 
-# Variables for the Jenkins host (Role=jenkins). What used to be the "one
-# manual step" (unlock wizard, plugins, email, job, webhook - README 2.3/2.4)
-# is now driven from here through Configuration as Code + Job DSL, so
-# rebuilding the stack from scratch needs no human in the Jenkins UI at all.
-
 ssm_prefix: /rmit
 
 email_address: "{{ lookup('amazon.aws.aws_ssm', '/rmit/EMAIL_ADDRESS', region=aws_region) }}"

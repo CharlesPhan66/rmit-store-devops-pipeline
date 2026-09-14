@@ -14,11 +14,6 @@
 # it from config.js at page load, and Vite copies that file into dist/
 # unhashed — so one built image can be pointed at any backend.
 #
-# That property is the whole reason this script exists instead of a Vite build
-# arg. With a build arg, staging and production are two different images and
-# "promote the build that passed the tests" stops meaning anything. Here they
-# are one image and two values of $API_BASE_URL.
-#
 #   docker run -e API_BASE_URL=http://<api-ip>/api  ...   split hosts
 #   docker run -e API_BASE_URL=/api                 ...   one nginx in front
 #

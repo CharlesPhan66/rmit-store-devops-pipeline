@@ -113,13 +113,6 @@ jenkins_home/jobs/**
 !jenkins_home/jobs/**/
 !jenkins_home/jobs/**/config.xml
 
-# AI Agents
-CLAUDE.MD
-AGENTS.md
-
-# Planning notes (working documents, not deliverables)
-plan/
-
 # Compose runtime configuration for Plan E option B.
 # Contains SECRET_KEY and the database password.
 compose.env

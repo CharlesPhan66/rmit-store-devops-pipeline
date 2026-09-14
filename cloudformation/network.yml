@@ -12,21 +12,6 @@ Description: >
   RMIT Store - network and security policy.
   Deploy first. Everything else imports from here.
 
-# The structure after running this stack is:
-# VPC
-# ├── 2 public subnets
-# ├── 2 private subnets
-# ├── Internet Gateway
-# ├── Route tables
-# └── Security Groups
-# Other files depend on this stack:
-# network.yml: Network and security policy
-#     ↓
-# bootstrap.yml: Ansible control node
-#     ↓
-# data.yml: RDS, S3, ECR
-#     ↓
-# compute.yml: Jenkins, staging host, Swarm cluster and load balancer
 
 Parameters:
   EnvironmentName:
@@ -49,8 +34,6 @@ Resources:
     Type: AWS::EC2::VPC
     Properties:
       CidrBlock: 10.0.0.0/16
-      # Allow DNS resolution and hostnames so that the Swarm cluster can use the
-      # internal AWS DNS to reach the RDS instance by name.
       EnableDnsSupport: true
       EnableDnsHostnames: true
       Tags:
@@ -64,18 +47,12 @@ Resources:
         - Key: Name
           Value: !Sub "${EnvironmentName}-igw"
 
-  # Attach the IGW to the VPC so that the public subnets can reach the internet.
-  # VPC ──────────────────
-  #                       ├──── VPCGatewayAttachment
-  # InternetGateway ──────
   VPCGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
 
-  # Two AZs because the load balancer requires it, even when every instance
-  # sits in one of them.
   PublicSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
@@ -98,8 +75,6 @@ Resources:
         - Key: Name
           Value: !Sub "${EnvironmentName}-public-2"
 
-  # These hold the RDS subnet group and nothing else. No route out, on purpose:
-  # that is what lets us skip the NAT gateway.
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
@@ -152,8 +127,6 @@ Resources:
       SubnetId: !Ref PublicSubnet2
       RouteTableId: !Ref PublicRouteTable
 
-  # No default route here. Anything placed in these subnets can reach the VPC
-  # and nothing else.
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -174,22 +147,7 @@ Resources:
       SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable
 
-  # ===================================================================
   # Security groups
-  #
-  # We create sg in this file to set them up at early stage, so that other stacks can reference them
-  # Sources are other security groups, not CIDR ranges. "Anything in
-  # 10.0.0.0/16" would also let a compromised Jenkins host join the Swarm
-  # cluster; "anything carrying swarm-sg" would not.
-  #
-  # Declared in dependency order. A group can reference one defined above it
-  # inline; a rule whose source is the group ITSELF has to be a separate
-  # SecurityGroupIngress resource, because CloudFormation will not let a
-  # resource reference itself.
-  # ===================================================================
-
-  # Alb security group:
-  # Port: 80
 
   AlbSg:
     Type: AWS::EC2::SecurityGroup
@@ -245,16 +203,6 @@ Resources:
           FromPort: 8080
           ToPort: 8080
           CidrIp: !Ref AdminCidr
-        # GitHub's webhook senders, so a push triggers a build instead of
-        # Jenkins polling every two minutes. These four ranges are the IPv4
-        # entries of the "hooks" array in https://api.github.com/meta - GitHub
-        # publishes them precisely so they can be allowed like this. They change
-        # rarely; a webhook that suddenly stops arriving is worth re-checking
-        # against that endpoint.
-        #
-        # Listing them beats opening 8080 to 0.0.0.0/0: the Jenkins UI has no
-        # TLS in front of it, so a wide-open port would put an admin login on
-        # the public internet in plaintext.
         - IpProtocol: tcp
           FromPort: 8080
           ToPort: 8080
@@ -307,11 +255,6 @@ Resources:
           FromPort: 8081
           ToPort: 8081
           CidrIp: !Ref AdminCidr
-        # The Smoke staging stage runs pytest from a container on the Jenkins
-        # host with --network host, so the request arrives carrying JenkinsSg.
-        # Without this the stage fails with a connect TIMEOUT rather than a
-        # refusal - the packets are dropped, so nothing on staging ever sees
-        # them and its logs stay empty, which sends you debugging the wrong box.
         - IpProtocol: tcp
           FromPort: 8081
           ToPort: 8081
@@ -372,15 +315,6 @@ Resources:
         - Key: Name
           Value: !Sub "${EnvironmentName}-swarm-sg"
 
-  # Swarm's own four ports, source = this same group
-  # 7946 needs BOTH tcp and udp. Missing 4789/udp is the nastiest failure in
-  # the whole project: the cluster reports Ready, services run, and containers
-  # on different nodes cannot reach each other - no error, only timeouts.
-
-  # Inbound rules for the Swarm cluster's own ports. These are separate resources
-  # because CloudFormation will not let a resource reference itself inline.
-  # Port 2377
-  # Source: itself to allow new nodes to join the cluster
   SwarmIngressManagement:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
@@ -437,13 +371,6 @@ Resources:
       SourceSecurityGroupId: !Ref SwarmSg
 
   # Database
-  # Reachable only from the two groups that actually query it. Because every
-  # group lives in this stack, no other template has to add ingress here.
-
-  # The database is in a private subnet, so it cannot be reached from the
-  # internet. The Swarm cluster and the staging host can reach it because they
-  # are in the same VPC and have security groups that allow it. The database
-  # does not need to reach anything else, so it has no outbound rules.
   # Port 5432
   # Source:
   # - SwarmSg: for the Swarm cluster to reach the database
@@ -466,9 +393,6 @@ Resources:
         - Key: Name
           Value: !Sub "${EnvironmentName}-db-sg"
 
-# Returned values for other stacks to import. The names are the same as the
-# resource names, but the values are the resource IDs. The other stacks do not
-# need to know the VPC CIDR or the subnet CIDRs, only the IDs.
 Outputs:
   # Other stacks can import by name
   # compute.yml may use !ImportValue to get the VPC ID, subnetIDs, and security group IDs. The names are the same as the resource names, but the values are the resource IDs.

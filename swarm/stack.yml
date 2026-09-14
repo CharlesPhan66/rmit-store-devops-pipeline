@@ -34,7 +34,7 @@ services:
       - EMAIL_HOST_PASSWORD
     networks: [rmit]
     deploy:
-      replicas: 3  # Tính luôn manager node
+      replicas: 3
       update_config:
         parallelism: 1
         delay: 10s
@@ -80,8 +80,6 @@ services:
       restart_policy:
         condition: on-failure
     healthcheck:
-      # /nginx-health is served by nginx itself (client-nginx-compose.conf),
-      # so this stays green independently of whether the api container is up.
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/nginx-health"]
       interval: 10s
       timeout: 5s

@@ -8,111 +8,11 @@
 # Acknowledgement: None
 
 # RMIT Store - the whole stack on one host.
-#
-# Build the two images FIRST, then bring the stack up. This file has no
-# `build:` section anywhere: it only runs images, it never produces them.
-#
-#   docker build -f docker/api.Dockerfile    --target runtime -t rmit-api:local .
-#   docker build -f docker/client.Dockerfile                  -t rmit-client:local .
-#
-#   docker compose --env-file compose.env -f docker-compose.prod.yml up -d
-#   docker compose --env-file compose.env -f docker-compose.prod.yml ps
-#   docker compose --env-file compose.env -f docker-compose.prod.yml down
-#   docker compose --env-file compose.env -f docker-compose.prod.yml down -v
-#
-# Both flags are required on EVERY command, not just up:
-#   --env-file  because it carries SECRET_KEY and DATABASE_URL into the
-#               containers, and Compose re-parses the file on each invocation
-#   -f          because without it Compose reads docker-compose.yml, the dev stack
-#
-# ${ECR} must be in the environment too - see the Registry note below. Jenkins
-# exports it over SSH; by hand:
-#
-#   export ECR="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com"
-#
-# To run the two images built above without any registry at all, tag them under
-# a prefix and name it here instead:
-#
-#   docker build -f docker/api.Dockerfile --target runtime -t local/rmit-api:local .
-#   export ECR=local IMAGE_TAG=local
-#
-# Skip `pull` in that case - the images exist locally and there is nothing to
-# fetch. Leave ECR unset entirely and Compose renders `/rmit-api:latest`, which
-# is not a valid image reference.
-#
-# Why build is separate from up:
-#   - `docker compose --build` delegates to buildx, which `dnf install docker`
-#     on AL2023 does not provide. Plain `docker build` needs no plugin.
-#   - Production must run the image that was tested, not one rebuilt on the box.
-#     Once Jenkins exists it builds once, tags by commit, and every environment
-#     runs that exact tag. A compose file that can rebuild defeats that.
-#   - Docker Swarm ignores `build:` outright, so swarm/stack.yml cannot have one.
-#     Keeping this file build-free means it already has the shape Swarm needs.
-#
-# Difference from docker-compose.yml:
-#   - config.settings.prod instead of dev: DEBUG off, ALLOWED_HOSTS enforced,
-#     browsable API off, secure-cookie defaults on.
-#   - USE_S3=true: uploaded images go to the S3 bucket, not container disk.
-#   - Configuration comes from compose.env, which is NOT committed. (Modify compose.env.example and copy it to compose.env, then fill in the values.)
-#   - Published on 8081, so it can run beside the dev stack on 8080. (Remember to open 8081 in the security group.)
-#
-# Prerequisites, all from Plan C / Plan D:
-#   - an RDS endpoint, reachable from this instance's security group on 5432
-#   - an S3 bucket, and an IAM instance profile on this EC2 (no AWS keys anywhere)
-#   - compose.env, written by hand on the box - see plan-e-compose-prod.md
-#
-# Three services, not four. The database is managed infrastructure now, which is
-# what production actually looks like. The dev stack keeps its db container
-# because its job is to come up anywhere Docker runs, with no AWS at all.
 
 name: rmit-store-prod
 
 services:
-
-  # --- Database --------------------------------------------------------------
-  # There is no db service, deliberately. Staging connects to the rmit_staging
-  # database on the same RDS instance production uses - a different database,
-  # never a different kind of database.
-  #
-  # A throwaway Postgres container would have been simpler, and that is exactly
-  # why it was wrong: the things that actually break on release day are the
-  # security group on 5432, delivering DATABASE_URL as a secret, and RDS's
-  # master account not being a real superuser. A container exercises none of
-  # them, so staging would go green on a release production cannot run.
-  #
-  # RDS is already running long before this stack starts, so there is nothing
-  # here to wait for and migrate needs no depends_on.
-
-  # --- Registry ---------------------------------------------------------------
-  # All three application services below pull from ${ECR}, and neither the
-  # account id nor the region is written down anywhere in this file. That is
-  # deliberate: the same commit has to deploy into whichever AWS account the
-  # marker happens to be running, and a hardcoded 123456789012.dkr.ecr.* would
-  # pull from an account they cannot see and fail with `no basic auth
-  # credentials`.
-  #
-  # Both variables are exported by the Deploy Staging stage in the Jenkinsfile:
-  #   ECR        <account-id>.dkr.ecr.<region>.amazonaws.com, read from
-  #              /rmit/ECR_REGISTRY, which cloudformation/data.yml publishes.
-  #              swarm/stack.yml reads the same variable name, so Compose and
-  #              Swarm share one registry setting rather than two.
-  #   IMAGE_TAG  the commit Jenkins is deploying.
-  #
-  # No `docker login` anywhere: the docker role installs
-  # amazon-ecr-credential-helper, so pull authenticates from the instance
-  # profile on every call and no 12h token can go stale.
-  #
-  # `migrate` and `api` must always be the same image: migrate runs that
-  # backend's own manage.py, so a mismatch migrates with one release's schema and
-  # then serves another release's code.
-  #
-  # To go back to Docker Hub, change nothing here, export ECR=<dockerhub-user>
-  # instead, since <dockerhub-user>/rmit-api:<tag> has the same shape.
-  #
-  # ${IMAGE_TAG:-latest} keeps a hand-typed `docker compose up` working when the
-  # variable is unset, which is useful while debugging.
-
-  # --- Migrations ------------------------------------------------------------
+  # Migrations
   # Same image as api - same build, only the command differs.
   migrate:
     image: ${ECR}/rmit-api:${IMAGE_TAG:-latest}
@@ -122,11 +22,8 @@ services:
       - ./compose.env
     restart: "no"
 
-  # --- API -------------------------------------------------------------------
+  # API
   api:
-    # Built by the `docker build --target runtime` command in the header.
-    # `--target runtime` is compulsory: stage `test` sits at the end of
-    # api.Dockerfile, and Docker uses the LAST stage when no target is given.
     image: ${ECR}/rmit-api:${IMAGE_TAG:-latest}
     # env_file instead of environment: to load the environment variables from compose.env, which is not committed to git. This is to avoid exposing sensitive information like AWS keys and RDS password in the source code.
     env_file:
@@ -134,9 +31,6 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-    # /readyz/ checks the database AND the storage backend, so with USE_S3=true
-    # this also proves the container can reach the bucket. If it stays 503 while
-    # `aws s3 ls` works on the host, read the IMDS hop limit section of the plan.
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz/')"]
       interval: 10s
@@ -144,24 +38,15 @@ services:
       retries: 5
       start_period: 15s
 
-  # --- Frontend --------------------------------------------------------------
+  # Frontend
   client:
     image: ${ECR}/rmit-client:${IMAGE_TAG:-latest}
     environment:
       API_BASE_URL: /api
     volumes:
-      # Same file as the dev stack. Its /media/ block simply never receives a
-      # request here: with USE_S3=true the browser fetches images straight from
-      # the bucket, so those URLs never come back to nginx at all.
       - ./docker/client-nginx-compose.conf:/etc/nginx/conf.d/default.conf:ro
-    # Different port from the dev stack, so they can run side by side on one host.
     ports:
       - "8081:80"
     depends_on:
       api:
         condition: service_healthy
-
-# No media volume anywhere in this file, and that is the point. Uploaded images
-# live in S3, so every replica reads the same bucket and `--scale api=2` shows
-# no broken images at all. That is the fix the dev stack demonstrates the need
-# for.

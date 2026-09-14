@@ -10,24 +10,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: RMIT Store durable resources (RDS, S3, ECR)
 
-# Below is 3 parameters we need to pass in when creating the stack.
-# The VPC ID is needed for the RDS security group
-# The DB password is needed for the RDS instance
-# And the S3 bucket name is needed for the S3 bucket.
-# May pass using the AWS CLI like this:
-# aws cloudformation deploy \
-#   --parameter-overrides DbPassword='your-password'
-# Example to use this file:
-# aws cloudformation deploy \
-#   --template-file cloudformation/data.yml \
-#   --stack-name rmit-data \
-#   --parameter-overrides \
-#     NetworkStackName='rmit-network' \
-#     DbPassword='your-password' \
-#     MediaBucketName='rmit-store-media'
-
-# If the network stack is named differently, you can pass in the name of the network stack when creating this stack
-# Otherwise, it will fallback to the default name rmit-network, and the stack will fail to create because it can't find the resources it needs from the network stack.
 Parameters:
   NetworkStackName:
     Type: String
@@ -173,14 +155,6 @@ Resources:
     DeletionPolicy: Snapshot
     Properties:
       DBInstanceIdentifier: rmit-store
-      # Production's database. Staging gets a SECOND database, rmit_staging, on
-      # this same instance - created by Ansible, because RDS lives in a private
-      # subnet with no route out and CloudFormation can never open a connection
-      # to run SQL, whatever the stack ordering.
-      #
-      # Two databases, one instance: staging travels the real network path and
-      # the real secret path, while a seed_demo --flush on staging still cannot
-      # reach a single production row.
       DBName: rmit_store
       Engine: postgres
       EngineVersion: "16"
@@ -195,23 +169,6 @@ Resources:
       PubliclyAccessible: false
       BackupRetentionPeriod: 0
 
-  # SSM
-  # Ansible and Jenkins read from this
-  # Save needed values to SSM to fetch later, for example to use the bucket name, the ECR registry, and the RDS endpoint in the Ansible playbook
-  #
-  # Naming rule, so Ansible and Jenkins know where to look without guessing:
-  #   /rmit/<NAME>                 one of them serves both environments - the
-  #                                registry, and the RDS INSTANCE
-  #   /rmit/<env>/<NAME>           one per environment - SECRET_KEY,
-  #                                DATABASE_URL, MEDIA_BUCKET
-  #
-  # The RDS instance is shared but the DATABASES on it are not, which is why
-  # the endpoint sits at the root and the connection strings do not.
-  # The per-environment secrets are NOT created here: they are SecureString,
-  # which CloudFormation cannot create. They are put in by CLI once (part 5.9).
-  # One bucket per environment, so both sit under an environment prefix. They
-  # used to share /rmit/MEDIA_BUCKET, which meant a seed_demo on staging could
-  # overwrite the very files production's rows pointed at.
   MediaBucketParam:
     Type: AWS::SSM::Parameter
     Properties:
@@ -233,12 +190,6 @@ Resources:
       Type: String
       Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com"
 
-  # At the root, because both environments now connect to this one instance -
-  # staging to the rmit_staging database, production to rmit_store. Sharing the
-  # instance is what makes staging exercise the parts that actually break on
-  # release day: the security group on 5432, delivering DATABASE_URL as a
-  # secret, and RDS's master account not being a real superuser. Sharing the
-  # DATABASE would have destroyed the point of having a staging gate at all.
   RdsEndpointParam:
     Type: AWS::SSM::Parameter
     Properties:
@@ -246,9 +197,6 @@ Resources:
       Type: String
       Value: !GetAtt Database.Endpoint.Address
 
-# We just return the RDS endpoint and the S3 bucket name to confirm that the stack has been created successfully, and to use them in the next step of the deployment.
-# Other values will be stored in SSM, so that the Ansible playbooks can read them from there.
-# Without SSM, the Ansible playbooks would have to be passed these values as parameters or we have to ssh and edit them manually, which is not secure and not scalable.
 Outputs:
   RdsEndpoint:
     Value: !GetAtt Database.Endpoint.Address

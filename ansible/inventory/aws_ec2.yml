@@ -7,19 +7,6 @@
 # Last modified: 08/09/2026
 # Acknowledgement: None
 
-# This is dynamic inventory, this is different from static inventory, what we have learned in the tutorial
-# Static vs. Dynamic
-# Static:
-# [dockerserver]
-# private-ip-address-of-docker-server
-# [ansibleserver]
-# private-ip-address-of-ansible-server
-# Dynamic:
-# Add plugin: amazon.aws.aws_ec2
-# Specify the regions to query for instances
-# Filter the instances based on tags, instance states, etc.
-# Hostnames can be specified based on tags or other attributes of the instances (For example, you can use the Name tag to specify hostnames for the instances)
-# package to be installed: pip install boto boto3 botocore
 plugin: amazon.aws.aws_ec2
 regions:
   - us-east-1

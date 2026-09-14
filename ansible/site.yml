@@ -8,10 +8,6 @@
 # Last modified: 08/09/2026
 # Acknowledgement: None
 
-# Which roles run where. No values live here on purpose: everything
-# environment-specific is in group_vars/, so rebuilding the infrastructure with
-# different addresses does not touch this file.
-#
 #   ansible-playbook site.yml                          # everything
 #   ansible-playbook site.yml --limit tag_Role_staging
 #   ansible-playbook site.yml --check --diff           # dry run
