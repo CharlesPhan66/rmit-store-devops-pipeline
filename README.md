@@ -9,7 +9,7 @@
   Acknowledgement: None
 -->
 
-# [Project Title]
+# RMIT STORE - FULL DEVOPS PIPELINE
 
 ## 1. Project Information
 
@@ -17,16 +17,16 @@
 
 **Assignment:** Assignment 2 - Group Project
 
-**Due Date:** [Date]
+**Due Date:** 16/09/2026
+
+**Lecturer:** Tom Huynh
 
 **Student Name(s) (sid):**
-- Phan Huynh Ba Khang (s4131861)
-- Tu Tuan Hung
-- Nguyen Cong Quoc Dat
-- 
-- 
-
-**Instructor:** Tom Huynh
+- Phan Huynh Ba Khang - s4131861
+- Tu Tuan Hung - s4130499
+- Nguyen Cong Quoc Dat - s4066942
+- Nguyen Le Thanh Trung - s4123479
+- Mai K Dang Khoa - s4058813
 
 ### 1.1 Repository Layout
 
