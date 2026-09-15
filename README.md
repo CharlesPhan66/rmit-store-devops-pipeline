@@ -81,7 +81,7 @@ Total time: roughly 30–40 minutes, most of it waiting on CloudFormation, plugi
 | `aws` CLI v2, configured | `aws sts get-caller-identity` must return a valid `Account`. Learner Lab sessions expire after ~4 hours - re-check this first if a later step fails with a credentials error. |
 | `git` | To clone this repo and push to trigger builds. |
 | A terminal (`zsh`/`bash`) | Every command below is written for one. |
-| An EC2 key pair | `aws ec2 create-key-pair --key-name devops_project_key --query KeyMaterial --output text > ~/.ssh/devops_project_key.pem && chmod 400 ~/.ssh/devops_project_key.pem`. Used only for manual SSH debugging - no component of the pipeline depends on it; Ansible and Jenkins each generate their own operational keys. |
+| An EC2 key pair | `aws ec2 create-key-pair --key-name devops_project_key --query KeyMaterial --output text > ~/.ssh/devops_project_key.pem && chmod 400 ~/.ssh/devops_project_key.pem`. Used only for manual SSH debugging - no component of the pipeline depends on it; Ansible and Jenkins each generate their own operational keys. Key pair: All commands assume the key pair is named devops_project_key with private key ~/.ssh/devops_project_key.pem. If you use a different key pair, update all the relevant commands accordingly. |
 | A Gmail account (Because learner lab doesn't grant access to SES, but if you prefer to use another SMTP provider, just use a different one) | For Jenkins build/deploy alert email and the app's own transactional mail. Needs an [App Password](https://myaccount.google.com/apppasswords), not the account password (This is the case for learner labs). Ansible wires the same App Password into Jenkins automatically - see 2.3. |
 | A GitHub Personal Access Token, scopes `repo` + `admin:repo_hook` | Ansible uses this once for two things: the `github-pat` credential Jenkins checks the repo out with, and registering the push webhook itself (2.3/2.4). Classic or fine-grained both work as long as those two scopes are covered. |
 
@@ -454,19 +454,12 @@ Then, from the Ansible control node, re-render `compose.env` and redeploy stagin
 
 ```bash
 cd ~/ansible
-ansible-playbook site.yml     # re-renders compose.env with the current public IP; everything
-                               # else on the other five hosts reports changed=0 (idempotent)
-
-# compose.env is now correct on disk, but the *running* containers were started with the old
-# one and won't pick it up on their own - force them to recreate. ECR and IMAGE_TAG are
-# deliberately not part of compose.env (Jenkins exports them at deploy time instead - see the
-# "Deploy Staging" stage in Jenkinsfile), so they must be passed explicitly here too. Reuse
-# whatever tag is already running (check with `docker ps` on staging, or read it off
-# /api/version/) - the goal is only to pick up the new IP, not to change what's deployed.
+ansible-playbook site.yml
 ECR=$(aws ssm get-parameter --name /rmit/ECR_REGISTRY --query Parameter.Value --output text)
 ansible tag_Role_staging -b -m shell -a \
-  "cd /home/ec2-user/deploy && ECR=$ECR IMAGE_TAG=<current-sha> \
-   docker compose --env-file compose.env -f docker-compose.prod.yml up -d --force-recreate api client"
+  "cd /home/ec2-user/deploy && \
+   IMAGE_TAG=\$(docker inspect rmit-store-prod-api-1 --format '{{ '{{.Config.Image}}' }}' | sed -E 's#.*:##') && \
+   ECR=$ECR IMAGE_TAG=\$IMAGE_TAG docker compose --env-file compose.env -f docker-compose.prod.yml up -d --force-recreate api client"
 ```
 
 Confirm it actually took, from outside the box, the same way any deploy is confirmed:
@@ -476,25 +469,6 @@ curl -s http://<staging-public-ip>:8081/api/version/
 curl -s -o /dev/null -w "%{http_code}\n" http://<staging-public-ip>:8081/readyz/   # must be 200, not 400
 ```
 
-If `/readyz/` still 400s after this, the container recreated with the *same* stale value it
-already had - almost always because the `docker compose` command above ran in a shell that
-didn't have the fresh `ECR`/`IMAGE_TAG`, so Compose fell back to `<blank>/rmit-api:latest`,
-found no such image, and quietly reused whatever was already running instead of failing loud
-enough to notice. Re-run with both variables set inline as shown, not exported separately in an
-earlier command.
-
-**A second, unrelated gotcha that resurfaces after any fresh boot of the Jenkins host:** this
-VPC has no IPv6 route at all (`cloudformation/network.yml` is IPv4-only - `ip -6 route show` on
-any host shows nothing past link-local). `smtp.gmail.com` publishes both an A and an AAAA
-record, and without `-Djava.net.preferIPv4Stack=true` in Jenkins's `JAVA_OPTS`, the JVM tries
-the AAAA address first, gets an immediate "Network is unreachable", and Jakarta Mail doesn't
-reliably fall back to the A record within its two retries - surfacing as a generic `SMTP
-connection error` on every `FAILED`/`RECOVERED` build notification, even though the SMTP server
-itself is fully reachable over IPv4 (`openssl s_client -starttls smtp` against it succeeds
-instantly). The fix already lives in `ansible/roles/jenkins/tasks/main.yml`'s systemd override
-task, so a plain `ansible-playbook site.yml` re-run is all a resumed session needs - there is no
-separate manual step here, this paragraph exists only so a future "email still doesn't send"
-report doesn't get mis-diagnosed as a credentials problem again.
 
 ### 2.9 Tearing down and rebuilding from scratch
 
@@ -622,6 +596,9 @@ Match the symptom below before investigating further - most of these read like a
 | `Your session has expired` on any `aws` command | Learner Lab sessions expire after ~4 hours | Get fresh credentials from AWS Details → AWS CLI → Show |
 | Container exits immediately on first deploy | `SECRET_KEY` or `ALLOWED_HOSTS` unset - `config.settings.prod` fails fast on purpose | `docker service logs rmit_api` (prod) or `docker compose logs api` (staging) |
 | Browser gets `400` from the ALB / staging URL | The ALB DNS or staging IP isn't in `ALLOWED_HOSTS` | Check `/rmit/prod/ALB_DNS` matches what `compose.env`/`swarm/stack.yml` set, redeploy |
+| Staging's `compose.env` on disk has the right public IP, `ansible-playbook site.yml` reports `changed=0`, but `/readyz/` still 400s | The `app` role only *writes* `compose.env`, it never runs `docker compose up -d` itself (that's normally Jenkins's job on a push) - the already-running containers keep serving whatever `ALLOWED_HOSTS` they started with until something recreates them | Force-recreate on staging: `docker compose --env-file compose.env -f docker-compose.prod.yml up -d --force-recreate api client` (2.8) |
+| That force-recreate command itself fails with `invalid reference format`, or `/readyz/` is still 400 afterwards | `ECR`/`IMAGE_TAG` aren't part of `compose.env` (Jenkins exports them separately at deploy time) - run in a shell without them, Compose falls back to `<blank>/rmit-api:latest`, finds no such image, and silently keeps the old container running instead of failing loudly | Use the command in 2.8, which reads `IMAGE_TAG` off the already-running container instead of a typed-in placeholder |
+| That force-recreate command fails with `` `current-sha`: No such file or directory `` (or similar) | An older copy of the 2.8 command had a literal `<current-sha>` placeholder in it, and `<`/`>` are shell redirection - typing it verbatim tries to read a file named `current-sha` | Use the current 2.8 command; it computes `IMAGE_TAG` itself, there is no placeholder to fill in by hand |
 | `password authentication failed for user "rmit"` | `DATABASE_URL` doesn't match the RDS master password | Re-run `scripts/put-secrets.sh` with the correct password (2.2 step 2) |
 | `no basic auth credentials` when pulling from ECR | ECR credential helper not installed on the target host | Re-run the `docker` Ansible role |
 | `docker: 'compose' is not a docker command` | Compose v2 plugin missing | Re-run the `docker` Ansible role |
@@ -645,6 +622,12 @@ Before doubting anything in the form, rule out the network with one command from
 ansible tag_Role_jenkins -a 'bash -lc "timeout 8 bash -c \"cat < /dev/null > /dev/tcp/smtp.gmail.com/587\" && echo OPEN || echo BLOCKED"'
 ```
 
+`OPEN` here isn't quite the full story: `/dev/tcp/smtp.gmail.com/587` resolves the hostname and can
+land on either its A (IPv4) or AAAA (IPv6) record depending on what the shell's resolver picks -
+so this check can report `OPEN` by quietly connecting over IPv4 while the JVM, resolving the same
+name independently, still fails over IPv6. See the row below before concluding the network is
+fully cleared.
+
 | Symptom | Cause | Fix |
 |---|---|---|
 | `Couldn't connect to host, port: localhost, 25` on Test | **Apply** wasn't clicked before **Test configuration** - the Test button reads the saved config, not what's currently typed on screen | Click Apply first, then Test (2.4 step 5) |
@@ -654,6 +637,7 @@ ansible tag_Role_jenkins -a 'bash -lc "timeout 8 bash -c \"cat < /dev/null > /de
 | `UnknownHostException`, or the test just hangs with no useful error | Typed `smtp.google.com` instead of `smtp.gmail.com` - the former resolves, so it looks plausible, but doesn't accept SMTP | Fix the hostname |
 | `550 ... not allowed to send mail on behalf of ...` | **Manage Jenkins → System → Jenkins Location → System Admin e-mail address** differs from the Gmail address used as the SMTP credential's username - Gmail refuses to send as an address it didn't authenticate as | Set System Admin e-mail address to the same Gmail address (this field isn't called out as its own step in 2.4 - set it alongside step 5) |
 | Test configuration succeeds, but no one is notified when a build actually fails | Filled in the plain **E-mail Notification** section instead of **Extended E-mail Notification** - `emailext` (what the `Jenkinsfile` uses) only reads the Extended one, so the Test button being green proves nothing about it. Or **Default Recipients** is empty | Re-check 2.4 step 5, and confirm the Extended section specifically, not the one below it |
+| `SMTP connection error while sending email` on a real `FAILED`/`RECOVERED` build notification, even though `openssl s_client -starttls smtp -connect smtp.gmail.com:587` from the Jenkins host succeeds instantly and the credential/recipients are all correctly configured | The VPC is IPv4-only (`ip -6 route show` on any host shows nothing past link-local) but `smtp.gmail.com` also publishes an AAAA record; without `-Djava.net.preferIPv4Stack=true` the JVM tries that address first, gets an immediate "Network is unreachable", and Jakarta Mail doesn't reliably fall back to the A record within its two retries | Already fixed in `ansible/roles/jenkins/tasks/main.yml`'s systemd override (`-Djava.net.preferIPv4Stack=true` in `JAVA_OPTS`) - a plain `ansible-playbook site.yml` re-run picks it up, nothing manual to do |
 
 **GitHub webhook**
 
