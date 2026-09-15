@@ -406,9 +406,16 @@ A Learner Lab session ending stops every EC2 instance. Most things survive; exac
 | Every EBS volume: Jenkins config, Docker images, `~/deploy`, `~/ansible` | **Public IP** of all six machines |
 | **Private IP** of all six machines | Your **home/office IP**, if you're somewhere else |
 | RDS endpoint, ALB DNS, S3 buckets, ECR, every SSM parameter | |
-| Swarm membership, Docker secrets, `compose.env` | |
+| Swarm membership, Docker secrets | |
 
-Private IPs staying put is what matters most: every SSM parameter Ansible and Jenkins read is a private IP or a DNS name, so **the playbook does not need to run again**.
+Private IPs staying put is what matters most: every SSM parameter Ansible and Jenkins read is a private IP or a DNS name, so **the playbook does not need to run again for Jenkins, staging's OS, or the Swarm cluster.**
+
+**Staging's `compose.env` is the one exception**, and it's easy to miss because nothing errors loudly - the site just quietly 400s on every API call while the homepage keeps loading fine. `ansible/roles/app/templates/compose.env.j2` bakes the staging host's own **public** IP into `ALLOWED_HOSTS`/`CLIENT_URL`/`CSRF_TRUSTED_ORIGINS` (`ansible/group_vars/tag_Role_staging.yml`: `allowed_hosts` reads `public_ip_address`, an attribute the `aws_ec2` dynamic inventory queries live from the EC2 API on every run - no caching, so a plain re-run always picks up the current IP). Production doesn't have this problem: `ALLOWED_HOSTS` there is the ALB's DNS name, which never changes.
+
+Two things both have to happen, and neither one alone is enough:
+
+1. **Re-render the file** - a plain `ansible-playbook site.yml` re-run does this automatically, because `public_ip_address` is live-queried, not cached.
+2. **Recreate the already-running containers** - the `app` role only *writes* `compose.env` (see the comment at the end of `ansible/roles/app/tasks/main.yml`); it deliberately never runs `docker compose up -d` itself, because normally that's Jenkins's job on the next push. But an IP change isn't a push, so nothing redeploys automatically - the containers keep serving whatever `ALLOWED_HOSTS` they were started with until something recreates them. Skipping this step is exactly how you end up with a correct file on disk and a stale, 400-ing container.
 
 Steps, in order:
 
@@ -443,6 +450,52 @@ aws ssm get-parameters-by-path --path /rmit --recursive \
 aws ssm get-parameter --name /rmit/JENKINS_PUBLIC_IP --query Parameter.Value --output text
 ```
 
+Then, from the Ansible control node, re-render `compose.env` and redeploy staging's containers onto it - both steps, not just the first:
+
+```bash
+cd ~/ansible
+ansible-playbook site.yml     # re-renders compose.env with the current public IP; everything
+                               # else on the other five hosts reports changed=0 (idempotent)
+
+# compose.env is now correct on disk, but the *running* containers were started with the old
+# one and won't pick it up on their own - force them to recreate. ECR and IMAGE_TAG are
+# deliberately not part of compose.env (Jenkins exports them at deploy time instead - see the
+# "Deploy Staging" stage in Jenkinsfile), so they must be passed explicitly here too. Reuse
+# whatever tag is already running (check with `docker ps` on staging, or read it off
+# /api/version/) - the goal is only to pick up the new IP, not to change what's deployed.
+ECR=$(aws ssm get-parameter --name /rmit/ECR_REGISTRY --query Parameter.Value --output text)
+ansible tag_Role_staging -b -m shell -a \
+  "cd /home/ec2-user/deploy && ECR=$ECR IMAGE_TAG=<current-sha> \
+   docker compose --env-file compose.env -f docker-compose.prod.yml up -d --force-recreate api client"
+```
+
+Confirm it actually took, from outside the box, the same way any deploy is confirmed:
+
+```bash
+curl -s http://<staging-public-ip>:8081/api/version/
+curl -s -o /dev/null -w "%{http_code}\n" http://<staging-public-ip>:8081/readyz/   # must be 200, not 400
+```
+
+If `/readyz/` still 400s after this, the container recreated with the *same* stale value it
+already had - almost always because the `docker compose` command above ran in a shell that
+didn't have the fresh `ECR`/`IMAGE_TAG`, so Compose fell back to `<blank>/rmit-api:latest`,
+found no such image, and quietly reused whatever was already running instead of failing loud
+enough to notice. Re-run with both variables set inline as shown, not exported separately in an
+earlier command.
+
+**A second, unrelated gotcha that resurfaces after any fresh boot of the Jenkins host:** this
+VPC has no IPv6 route at all (`cloudformation/network.yml` is IPv4-only - `ip -6 route show` on
+any host shows nothing past link-local). `smtp.gmail.com` publishes both an A and an AAAA
+record, and without `-Djava.net.preferIPv4Stack=true` in Jenkins's `JAVA_OPTS`, the JVM tries
+the AAAA address first, gets an immediate "Network is unreachable", and Jakarta Mail doesn't
+reliably fall back to the A record within its two retries - surfacing as a generic `SMTP
+connection error` on every `FAILED`/`RECOVERED` build notification, even though the SMTP server
+itself is fully reachable over IPv4 (`openssl s_client -starttls smtp` against it succeeds
+instantly). The fix already lives in `ansible/roles/jenkins/tasks/main.yml`'s systemd override
+task, so a plain `ansible-playbook site.yml` re-run is all a resumed session needs - there is no
+separate manual step here, this paragraph exists only so a future "email still doesn't send"
+report doesn't get mis-diagnosed as a credentials problem again.
+
 ### 2.9 Tearing down and rebuilding from scratch
 
 This is also the evidence for requirement 1: the infrastructure is disposable - it can be deleted and rebuilt on demand. Screen-record it if you're using this as evidence.
@@ -463,7 +516,6 @@ CloudFormation cannot delete a bucket that still has objects in it. Skip this an
 PROD_BUCKET=$(aws ssm get-parameter --name /rmit/prod/MEDIA_BUCKET --query Parameter.Value --output text)
 STAGING_BUCKET=$(aws ssm get-parameter --name /rmit/staging/MEDIA_BUCKET --query Parameter.Value --output text)
 
-# --force empties the bucket and removes it in one call.
 aws s3 rb "s3://$STAGING_BUCKET" --force
 aws s3 rb "s3://$PROD_BUCKET"    --force
 ```
