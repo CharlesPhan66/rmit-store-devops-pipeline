@@ -98,6 +98,6 @@ class PaymentProcessorTests(TestCase):
         ]
         subtotal, tax, total = calculate_order_total(items, tax_rate=Decimal("0.05"))
         self.assertEqual(subtotal, Decimal("72.90"))
-        self.assertEqual(tax, Decimal("2.25"))
-        # self.assertEqual(tax, Decimal("99.99"))
+        # self.assertEqual(tax, Decimal("2.25"))
+        self.assertEqual(tax, Decimal("99.99"))
         self.assertEqual(total, Decimal("75.15"))
