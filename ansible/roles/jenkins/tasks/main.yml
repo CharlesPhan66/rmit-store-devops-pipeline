@@ -124,7 +124,7 @@
       # (systemd applies later Environment= assignments for the same key
       # last), so java.awt.headless must be repeated here, not just appended.
       [Service]
-      Environment="JAVA_OPTS=-Djava.awt.headless=true -Djenkins.install.runSetupWizard=false -Duser.timezone=Asia/Ho_Chi_Minh -Djava.net.preferIPv4Stack=true"
+      Environment="JAVA_OPTS=-Djava.awt.headless=true -Djenkins.install.runSetupWizard=false -Duser.timezone=Asia/Ho_Chi_Minh"
       Environment="CASC_JENKINS_CONFIG=/var/lib/jenkins/casc_configs/jenkins.yaml"
       Environment="JENKINS_ADMIN_PASSWORD={{ jenkins_admin_password }}"
       Environment="EMAIL_APP_PASSWORD={{ email_app_password }}"
