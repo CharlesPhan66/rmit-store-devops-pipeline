@@ -4,7 +4,7 @@
 # Assessment: Assignment 2
 # Author: Le Nguyen Thanh Trung - 4123479
 # Created date: 22/08/2026
-# Last modified: 11/09/2026
+# Last modified: 15/09/2026
 # Acknowledgement: None
 
 import pytest
@@ -98,6 +98,5 @@ class PaymentProcessorTests(TestCase):
         ]
         subtotal, tax, total = calculate_order_total(items, tax_rate=Decimal("0.05"))
         self.assertEqual(subtotal, Decimal("72.90"))
-        # self.assertEqual(tax, Decimal("2.25"))
-        self.assertEqual(tax, Decimal("100.00"))
+        self.assertEqual(tax, Decimal("2.25"))
         self.assertEqual(total, Decimal("75.15"))
