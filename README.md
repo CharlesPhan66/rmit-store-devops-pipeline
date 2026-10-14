@@ -3,7 +3,7 @@
   Course: COSC2767|COSC2805 Systems Deployment and Operations
   Semester: 2026B
   Assessment: Assignment 2
-  Author: Charles Phan - 4131861
+  Author: Charles Phan
   Created date: 17/08/2026
   Last modified: 13/09/2026
   Acknowledgement: None
@@ -21,12 +21,12 @@
 
 **Lecturer:** Tom Huynh
 
-**Student Name(s) (sid):**
-- Phan Huynh Ba Khang - s4131861
-- Tu Tuan Hung - s4130499
-- Nguyen Cong Quoc Dat - s4066942
-- Nguyen Le Thanh Trung - s4123479
-- Mai K Dang Khoa - s4058813
+**Student Name(s):**
+- Phan Huynh Ba Khang
+- Tu Tuan Hung
+- Nguyen Cong Quoc Dat
+- Nguyen Le Thanh Trung
+- Mai K Dang Khoa
 
 ### 1.1 Repository Layout
 
